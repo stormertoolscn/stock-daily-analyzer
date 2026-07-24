@@ -1,0 +1,80 @@
+/*
+ * 主题变量定义。
+ * data-theme 由 MainLayout 的主题切换器写到 <html> 上，
+ * "跟随系统" 模式会在 JS 中解析为 light/dark 后再写入，
+ * 因此这里只需维护 4 套具体配色 + 默认(浅色)。
+ */
+
+:root {
+  --color-bg: #f5f6f8;
+  --color-bg-elevated: #ffffff;
+  --color-bg-sidebar: #ffffff;
+  --color-border: #e2e5ea;
+  --color-text: #1f2329;
+  --color-text-muted: #6b7280;
+  --color-accent: #3b82f6;
+  --color-accent-hover: #2563eb;
+  --color-up: #f5222d;
+  --color-down: #16a34a;
+}
+
+[data-theme="light"] {
+  --color-bg: #f5f6f8;
+  --color-bg-elevated: #ffffff;
+  --color-bg-sidebar: #ffffff;
+  --color-border: #e2e5ea;
+  --color-text: #1f2329;
+  --color-text-muted: #6b7280;
+  --color-accent: #3b82f6;
+  --color-accent-hover: #2563eb;
+  --color-up: #f5222d;
+  --color-down: #16a34a;
+}
+
+[data-theme="dark"] {
+  --color-bg: #16181d;
+  --color-bg-elevated: #1e2127;
+  --color-bg-sidebar: #1a1d23;
+  --color-border: #2c2f36;
+  --color-text: #e6e6e6;
+  --color-text-muted: #9aa0a6;
+  --color-accent: #4c8dff;
+  --color-accent-hover: #6ea2ff;
+  --color-up: #f5222d;
+  --color-down: #22c55e;
+}
+
+[data-theme="github"] {
+  --color-bg: #ffffff;
+  --color-bg-elevated: #f6f8fa;
+  --color-bg-sidebar: #f6f8fa;
+  --color-border: #d0d7de;
+  --color-text: #1f2328;
+  --color-text-muted: #57606a;
+  --color-accent: #0969da;
+  --color-accent-hover: #0550ae;
+  --color-up: #cf222e;
+  --color-down: #1a7f37;
+}
+
+[data-theme="chrome"] {
+  --color-bg: #f1f3f4;
+  --color-bg-elevated: #ffffff;
+  --color-bg-sidebar: #ffffff;
+  --color-border: #dadce0;
+  --color-text: #202124;
+  --color-text-muted: #5f6368;
+  --color-accent: #1a73e8;
+  --color-accent-hover: #1765cc;
+  --color-up: #d93025;
+  --color-down: #188038;
+}
+
+body,
+#app {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}

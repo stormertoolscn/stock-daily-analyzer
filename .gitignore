@@ -40,3 +40,9 @@ wheels/
 # IDEs
 .idea/
 .vscode/
+
+# Frontend (frontend/)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.local
