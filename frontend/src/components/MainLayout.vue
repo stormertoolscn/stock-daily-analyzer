@@ -42,6 +42,10 @@ function handleSystemChange() {
   }
 }
 
+function selectTheme(mode: ThemeMode) {
+  themeMode.value = mode;
+}
+
 watch(themeMode, (mode) => {
   localStorage.setItem(THEME_STORAGE_KEY, mode);
   applyTheme(mode);
@@ -60,52 +64,43 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex h-screen overflow-hidden">
-    <aside
-      class="flex w-56 shrink-0 flex-col border-r border-border bg-bg-sidebar"
-    >
-      <div class="px-5 py-4 text-lg font-semibold">股票日报助手</div>
-      <nav class="flex flex-col gap-1 px-3">
+  <div class="flex h-screen flex-col overflow-hidden bg-bg">
+    <header class="shrink-0 bg-bg-elevated px-6 pt-5">
+      <div class="flex items-start justify-between gap-4 pb-4">
+        <div>
+          <h1 class="text-xl font-semibold text-text">股票日报助手</h1>
+          <p class="mt-1 text-sm text-text-muted">A股每日量化 + LLM 选股分析</p>
+        </div>
+
+        <div class="pill-group">
+          <button
+            v-for="opt in themeOptions"
+            :key="opt.value"
+            type="button"
+            class="pill"
+            :class="{ 'pill-active': themeMode === opt.value }"
+            @click="selectTheme(opt.value)"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
+      </div>
+
+      <nav class="tab-bar">
         <router-link
           v-for="item in navItems"
           :key="item.path"
           :to="item.path"
-          class="rounded-md px-3 py-2 text-sm transition-colors"
-          :class="
-            route.path === item.path
-              ? 'bg-accent text-white'
-              : 'text-text hover:bg-bg'
-          "
+          class="tab-item"
+          :class="{ 'tab-item-active': route.path === item.path }"
         >
           {{ item.label }}
         </router-link>
       </nav>
-    </aside>
+    </header>
 
-    <div class="flex flex-1 flex-col overflow-hidden">
-      <header
-        class="flex h-14 shrink-0 items-center justify-end border-b border-border bg-bg-elevated px-6"
-      >
-        <label class="flex items-center gap-2 text-sm text-text-muted">
-          主题
-          <select
-            v-model="themeMode"
-            class="rounded-md border border-border bg-bg px-2 py-1 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent"
-          >
-            <option
-              v-for="opt in themeOptions"
-              :key="opt.value"
-              :value="opt.value"
-            >
-              {{ opt.label }}
-            </option>
-          </select>
-        </label>
-      </header>
-
-      <main class="flex-1 overflow-auto bg-bg p-6">
-        <router-view />
-      </main>
-    </div>
+    <main class="flex-1 overflow-auto p-6">
+      <router-view />
+    </main>
   </div>
 </template>

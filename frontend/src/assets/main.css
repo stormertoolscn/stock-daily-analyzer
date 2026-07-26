@@ -7,3 +7,68 @@ body,
   background-color: var(--color-bg);
   color: var(--color-text);
 }
+
+/*
+ * 共享样式基元，参考"屏幕与字体调节"风格的设置面板：
+ * 卡片(card) + 分段胶囊(pill) + 顶部页签(tab)。
+ * 所有页面统一复用这几个类，而不是各自定义样式。
+ */
+@layer components {
+  .card {
+    @apply rounded-xl border border-border bg-bg-elevated p-5;
+  }
+
+  .card-title {
+    @apply mb-3 text-base font-semibold text-text;
+  }
+
+  .field-row {
+    @apply flex items-center justify-between border-b border-border py-2 text-sm last:border-b-0;
+  }
+
+  .field-label {
+    @apply text-text-muted;
+  }
+
+  .field-value {
+    @apply font-medium text-text;
+  }
+
+  .pill-group {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
+  .pill {
+    @apply cursor-pointer whitespace-nowrap rounded-full border border-transparent bg-bg px-3 py-1.5 text-sm text-text-muted transition-colors hover:text-text;
+  }
+
+  .pill-active {
+    @apply border-accent text-accent;
+    background-color: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  }
+
+  .tab-bar {
+    @apply flex items-center gap-6 overflow-x-auto border-b border-border;
+  }
+
+  .tab-item {
+    @apply relative shrink-0 py-3 text-sm text-text-muted transition-colors hover:text-text;
+  }
+
+  .tab-item-active {
+    @apply text-text;
+  }
+
+  .tab-item-active::after {
+    content: "";
+    @apply absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-accent;
+  }
+
+  .btn {
+    @apply rounded-lg border border-border bg-bg-elevated px-4 py-1.5 text-sm text-text transition-colors hover:bg-bg;
+  }
+
+  .btn-primary {
+    @apply border-transparent bg-accent text-white hover:bg-accent-hover;
+  }
+}
