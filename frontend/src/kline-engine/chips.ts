@@ -10,6 +10,8 @@ export interface ChipBin {
 
 export interface ChipDistribution {
   bins: ChipBin[];
+  /** 价格桶步长（与 bins[].price 间距一致） */
+  step: number;
   /** 平均成本 */
   avgCost: number;
   /** 获利比例 0-1（成本低于现价） */
@@ -99,6 +101,7 @@ export function computeChipDistribution(
 
   return {
     bins,
+    step,
     avgCost: costSum / total,
     profitRatio: profitVol / total,
     close,

@@ -137,7 +137,13 @@ function draw() {
   // 与主图 Y 轴同向：高价在上；无额外上下 padding，避免与主图底边错位
   const yOf = (price: number) => ((maxP - price) / priceSpan) * plotH;
 
-  const binH = Math.max(1, plotH / bins.length);
+  // 柱高必须按「价格步长 → 像素」换算；用 plotH/bins.length 会在主图缩放时重叠成粗条
+  const step =
+    dist.step > 0
+      ? dist.step
+      : bins.length > 1
+        ? Math.abs(bins[1].price - bins[0].price)
+        : priceSpan / Math.max(bins.length, 1);
 
   ctx.save();
   ctx.beginPath();
@@ -147,12 +153,14 @@ function draw() {
   for (const bin of bins) {
     const w = (bin.volume / maxVol) * barMaxW;
     if (w < 0.5) continue;
-    const y = yOf(bin.price) - binH / 2;
+    const yTop = yOf(bin.price + step / 2);
+    const yBot = yOf(bin.price - step / 2);
+    const h = Math.max(0.8, yBot - yTop);
     // 完全落在可视价格轴外则跳过
-    if (y + binH < 0 || y > cssH) continue;
+    if (yBot < 0 || yTop > cssH) continue;
     ctx.fillStyle = bin.price <= dist.close ? up : locked;
     ctx.globalAlpha = 0.85;
-    ctx.fillRect(0, y, w, Math.max(1, binH - 0.3));
+    ctx.fillRect(0, yTop, w, h);
   }
   ctx.globalAlpha = 1;
 
