@@ -1,6 +1,15 @@
-from fastapi import APIRouter, HTTPException
+from typing import Literal
 
-from app.models.schemas import StockBasicInfo
+from fastapi import APIRouter, HTTPException, Query
+
+from app.models.schemas import (
+    KlineResponse,
+    StockBasicInfo,
+    StockSearchItem,
+    StockSearchResponse,
+)
+from app.services.ohlc import fetch_kline
+from app.services.stock_meta import lookup_name, search_stocks
 
 router = APIRouter(prefix="/api/stock", tags=["stock"])
 
@@ -34,7 +43,7 @@ def _fetch_from_akshare(code: str) -> StockBasicInfo | None:
 def _mock_basic_info(code: str) -> StockBasicInfo:
     return StockBasicInfo(
         code=code,
-        name="示例股票",
+        name=lookup_name(code) or "示例股票",
         price=8.01,
         change_pct=-2.84,
         open=8.21,
@@ -47,17 +56,74 @@ def _mock_basic_info(code: str) -> StockBasicInfo:
     )
 
 
+@router.get("/search", response_model=StockSearchResponse)
+def get_stock_search(
+    q: str = Query(..., min_length=1, description="代码 / 名称 / 拼音 / 首字母"),
+    limit: int = Query(12, ge=1, le=30),
+) -> StockSearchResponse:
+    """股票联想搜索：601666、平煤、PMGF 均可。"""
+    try:
+        items = search_stocks(q, limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"搜索失败: {exc}") from exc
+    return StockSearchResponse(
+        query=q,
+        items=[StockSearchItem(**it) for it in items],
+    )
+
+
 @router.get("/{code}/basic", response_model=StockBasicInfo)
 def get_stock_basic(code: str) -> StockBasicInfo:
-    """获取单只股票的基础行情数据（示例接口，用于前端联调）。
-
-    优先通过 akshare 拉取实时行情；若网络不可用或未安装依赖，
-    降级返回 mock 数据，保证前端开发不被外部数据源阻塞。
-    """
+    """获取单只股票的基础行情数据。"""
     if not code:
         raise HTTPException(status_code=400, detail="code is required")
 
     info = _fetch_from_akshare(code)
     if info is None:
         info = _mock_basic_info(code)
+    elif not info.name or info.name.startswith("股票"):
+        resolved = lookup_name(code)
+        if resolved:
+            info.name = resolved
     return info
+
+
+@router.get("/{code}/kline", response_model=KlineResponse)
+def get_stock_kline(
+    code: str,
+    period: Literal["intraday", "day", "week", "month"] = Query(
+        "day",
+        description="分时 / 日 / 周 / 月",
+    ),
+    adjust: Literal["qfq", "hfq", "none"] = Query(
+        "qfq",
+        description="复权方式（当前数据源实际固定前复权）",
+    ),
+    trade_date: str | None = Query(
+        None,
+        description="分时交易日 YYYY-MM-DD；空则最新交易日",
+    ),
+) -> KlineResponse:
+    """获取 K 线 OHLCV，数据来自 stock-daily-analyzer 的 market_data 链路。"""
+    if not code or len(code.strip()) < 4:
+        raise HTTPException(status_code=400, detail="invalid stock code")
+
+    try:
+        payload = fetch_kline(
+            code.strip(),
+            ui_period=period,
+            adjust=adjust,
+            trade_date=trade_date,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — 对外统一 502
+        raise HTTPException(
+            status_code=502,
+            detail=f"行情源异常: {exc}",
+        ) from exc
+
+    if not payload.get("name"):
+        payload["name"] = lookup_name(payload["code"])
+
+    return KlineResponse(**payload)

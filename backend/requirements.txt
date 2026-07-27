@@ -3,4 +3,9 @@ uvicorn[standard]==0.30.1
 pydantic==2.7.4
 pydantic-settings==2.3.4
 python-dotenv==1.0.1
-akshare==1.14.55
+# 行情：与 stock-daily-analyzer-main 对齐
+akshare>=1.18.8
+pandas>=2.0.0
+numpy>=1.24.0
+yfinance>=0.2.0
+pypinyin>=0.49.0

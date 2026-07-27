@@ -17,6 +17,47 @@ export interface KlineBar {
   low: number;
   close: number;
   volume: number;
+  /** 分时均价（VWAP），仅 intraday 模式有 */
+  avg?: number;
+  /** 分时阶段：集合竞价 / 连续竞价 */
+  phase?: "auction" | "continuous";
+}
+
+/** 图表模式：日/周/月用 candle；分时用折线。 */
+export type ChartMode = "candle" | "intraday";
+
+export interface BuildOptionParams {
+  mode?: ChartMode;
+  /** 昨收，分时图画基准线并用它算涨跌幅 */
+  prevClose?: number | null;
+  /** 是否显示跳空缺口，默认 true */
+  showGaps?: boolean;
+  /** 分时是否显示集合竞价区，默认 true */
+  showAuction?: boolean;
+  /** 覆盖主图均线（最多 12 根） */
+  maLines?: MaLineStyle[];
+  /** 覆盖量能均线 */
+  volMaLines?: MaLineStyle[];
+  /** K 线底部区域选择滑条，默认 true（仅 candle） */
+  showSlider?: boolean;
+  /** 通达信风格特征叠加（涨停/破板/壹泽洗等），默认 true */
+  showFeatures?: boolean;
+  /** 股票代码（用于涨跌停幅度：主板10%/创业科创20%/ST5%） */
+  stockCode?: string;
+  /** 股票名称（检测 ST） */
+  stockName?: string;
+  /** 保留当前 dataZoom 窗口（百分比 0–100） */
+  zoomStart?: number;
+  zoomEnd?: number;
+}
+
+/** 均线周期 / 颜色 / 线宽（远航版可自定义；width=0 不可见）。 */
+export interface MaLineStyle {
+  period: number;
+  color: string;
+  name?: string;
+  /** 线宽，0 表示不绘制 */
+  width?: number;
 }
 
 /** 视觉主题配置：颜色、柱体样式等，均来自配置而非组件内硬编码。 */
@@ -31,6 +72,38 @@ export interface KlineTheme {
   volumeDownColor: string;
   /** A股要求实心柱体；hollow 仅为将来兼容其他市场预留 */
   candleStyle: "solid" | "hollow";
+  /** 主图均线样式 */
+  maLines: MaLineStyle[];
+  /** 量柱副图均线 */
+  volMaLines: MaLineStyle[];
+  /** MACD 线色 */
+  macdDifColor: string;
+  macdDeaColor: string;
+  /** 十字光标 / 坐标轴标签 */
+  axisPointerBg: string;
+  textColor: string;
+  mutedTextColor: string;
+  splitLineColor: string;
+  backgroundColor: string;
+}
+
+/** 十字线悬停时向外抛出的行情快照。 */
+export interface KlineQuoteSnapshot {
+  index: number;
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  change: number;
+  changePct: number;
+  ma: Record<string, number | null>;
+  avg: number | null;
+  volumeLabel: string;
+  macd: { dif: number; dea: number; macd: number };
+  /** 量能均线当前值 */
+  volMa: Record<string, number | null>;
 }
 
 /** 一次形态识别命中结果。 */
