@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import stock
+from app.api import lhb, stock
 from app.core.config import settings
 
 
@@ -30,6 +30,7 @@ app.add_middleware(
 )
 
 app.include_router(stock.router)
+app.include_router(lhb.router)
 
 
 @app.get("/api/health")

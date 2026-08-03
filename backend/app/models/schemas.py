@@ -58,3 +58,82 @@ class StockSearchItem(BaseModel):
 class StockSearchResponse(BaseModel):
     query: str
     items: list[StockSearchItem]
+
+
+class LhbDailyItem(BaseModel):
+    code: str
+    name: str
+    trade_date: str
+    reason: str = ""
+    insight: str = ""
+    close: float = 0
+    change_pct: float = 0
+    net_buy: float = 0
+    buy_amount: float = 0
+    sell_amount: float = 0
+    lhb_amount: float = 0
+    market_amount: float = 0
+    net_buy_ratio: Optional[float] = None
+    turnover_ratio: Optional[float] = None
+    turnover_rate: Optional[float] = None
+    float_mv: Optional[float] = None
+    ret_1d: Optional[float] = None
+    ret_2d: Optional[float] = None
+    ret_5d: Optional[float] = None
+    ret_10d: Optional[float] = None
+    source: str = "akshare"
+
+
+class LhbDailyResponse(BaseModel):
+    trade_date: str
+    count: int
+    items: list[LhbDailyItem]
+    source: str
+
+
+class LhbSeatItem(BaseModel):
+    rank: int = 0
+    seat_name: str
+    buy_amount: float = 0
+    sell_amount: float = 0
+    net_amount: float = 0
+    buy_ratio: float = 0
+    sell_ratio: float = 0
+    seat_kind: Literal["institution", "hotmoney", "other"] = "hotmoney"
+    reason_type: str = ""
+    side: Literal["buy", "sell"]
+
+
+class LhbGraphNode(BaseModel):
+    id: str
+    label: str
+    kind: Literal["stock", "seat"]
+    code: Optional[str] = None
+    full_label: Optional[str] = None
+    seat_kind: Optional[Literal["institution", "hotmoney", "other"]] = None
+    amount: float = 0
+
+
+class LhbGraphEdge(BaseModel):
+    id: str
+    source: str
+    target: str
+    side: Literal["buy", "sell"]
+    amount: float = 0
+    label: str = ""
+
+
+class LhbGraphPayload(BaseModel):
+    trade_date: str
+    nodes: list[LhbGraphNode]
+    edges: list[LhbGraphEdge]
+
+
+class LhbSeatDetailResponse(BaseModel):
+    code: str
+    name: str
+    trade_date: str
+    buys: list[LhbSeatItem]
+    sells: list[LhbSeatItem]
+    graph: LhbGraphPayload
+    source: str
