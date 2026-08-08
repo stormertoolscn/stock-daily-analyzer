@@ -35,6 +35,8 @@ export interface FeaturePaintRect {
   fill: string;
   stroke: string;
   lineWidth: number;
+  /** 占格子带宽的比例（0~1），默认 0.7（与现有 70% 宽一致） */
+  widthRatio?: number;
 }
 
 export interface FeatureOverlayResult {
@@ -123,6 +125,29 @@ function pushYellowTip(
   });
 }
 
+/** 紫色实体：宽度 = 蜡烛宽度的 2/3（蜡烛宽 68% → 带宽约 45.33%） */
+const PURPLE_BODY_WIDTH_RATIO = (68 / 100) * (2 / 3);
+
+/** 涨停/倍量涨停紫色实体（比 K 线本体窄 1/3） */
+function pushPurpleBody(
+  paintRects: FeaturePaintRect[],
+  date: string,
+  bar: KlineBar,
+) {
+  const y0 = Math.min(bar.open, bar.close);
+  const y1 = Math.max(bar.open, bar.close);
+  if (Math.abs(y1 - y0) < 1e-8) return; // 一字板无实体，跳过
+  paintRects.push({
+    date,
+    y0,
+    y1,
+    fill: FEATURE_COLORS.limitUp,
+    stroke: FEATURE_COLORS.limitUp,
+    lineWidth: 0,
+    widthRatio: PURPLE_BODY_WIDTH_RATIO,
+  });
+}
+
 export interface BuildFeatureOverlayOptions {
   /**
    * 是否展示日线级涨跌停/破板类标注与着色。
@@ -163,13 +188,14 @@ export function buildFeatureOverlay(
       candleData.push({
         value: ohlc,
         itemStyle: {
-          color: FEATURE_COLORS.volLimitUp,
-          color0: FEATURE_COLORS.volLimitUp,
+          color: "rgba(0,0,0,0)",
+          color0: "rgba(0,0,0,0)",
           borderColor: FEATURE_COLORS.volLimitUpBorder,
           borderColor0: FEATURE_COLORS.volLimitUpBorder,
           borderWidth: 3,
         },
       });
+      pushPurpleBody(paintRects, date, bar);
       pushYellowTip(paintRects, date, bar, 0.26);
       pushLabel(
         markPointData,
@@ -183,13 +209,14 @@ export function buildFeatureOverlay(
       candleData.push({
         value: ohlc,
         itemStyle: {
-          color: FEATURE_COLORS.limitUp,
-          color0: FEATURE_COLORS.limitUp,
+          color: "rgba(0,0,0,0)",
+          color0: "rgba(0,0,0,0)",
           borderColor: FEATURE_COLORS.limitUp,
           borderColor0: FEATURE_COLORS.limitUp,
           borderWidth: 1,
         },
       });
+      pushPurpleBody(paintRects, date, bar);
       pushYellowTip(paintRects, date, bar, 0.22);
       pushLabel(markPointData, date, bar.high, "涨停", FEATURE_COLORS.limitUp);
     } else if (includeDaily && t.limitDown) {

@@ -207,6 +207,9 @@ export function buildVolumeOverlaySeries(
 ): object[] {
   const n = bars.length;
   const barW = typeof opts.barWidth === "string" ? opts.barWidth : Math.max(1, opts.barWidth);
+  // 紫色量柱：宽度 = 蜡烛宽度的 2/3（蜡烛宽 68% → 带宽约 45.33%）
+  const purpleBarW =
+    typeof opts.barWidth === "string" ? "45.33%" : Math.max(1, opts.barWidth * (2 / 3));
   const dates = opts.dates;
   const vols = bars.map((b) => b.volume);
 
@@ -361,7 +364,7 @@ export function buildVolumeOverlaySeries(
       xAxisIndex: 1,
       yAxisIndex: 1,
       data: purpleB,
-      barWidth: barW,
+      barWidth: purpleBarW,
       barGap: "-100%",
       z: 4,
       silent: true,

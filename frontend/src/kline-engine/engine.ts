@@ -885,7 +885,8 @@ export function createKlineEngine(
               const p0 = api.coord([xIndex, y0]);
               const p1 = api.coord([xIndex, y1]);
               const size = api.size([1, 0]);
-              const half = Math.max(2.5, (size[0] as number) * 0.35);
+              const ratio = rect.widthRatio ?? 0.7;
+              const half = Math.max(2.5, (size[0] as number) * ratio * 0.5);
               const x = p0[0] - half;
               const y = Math.min(p0[1], p1[1]);
               const h = Math.max(2, Math.abs(p1[1] - p0[1]));
