@@ -135,11 +135,13 @@ function applyZoom(start: number, end: number) {
 }
 
 /** ↑ 收缩（放大）；↓ 放开（缩小）。
- * 有十字线（含键盘留下的竖线位置）时锚定它所在 K 线，缩放后不逃出窗口；
- * 否则围绕当前窗口中心缩放，不把最新 K 线锁死在右端。 */
+ * 有十字线（含键盘留下的竖线位置）且在当前窗口内时，锚定它所在 K 线，缩放后不逃出窗口；
+ * 否则锚定窗口正中的 K 线，围绕窗口中心缩放，两侧对称收放。 */
 function zoomStep(direction: "in" | "out") {
   if (!chart || !props.bars.length) return;
   const n = props.bars.length;
+  // ECharts dataZoom 百分比映射到类别轴值 0..n-1（与 visibleIndexRange 一致）
+  const extent = Math.max(1, n - 1);
   const { start, end } = readZoom();
   let span = Math.max(0.5, end - start);
   const minSpan = Math.max(
@@ -153,46 +155,36 @@ function zoomStep(direction: "in" | "out") {
     span = Math.min(100, span / ZOOM_FACTOR);
   }
 
-  const anchor =
-    holdAnchor != null && holdAnchor >= 0 && holdAnchor < n ? holdAnchor : null;
-  const a = (start / 100) * n;
-  const b = (end / 100) * n;
+  const a = (start / 100) * extent;
+  const b = (end / 100) * extent;
   const spanU = Math.max(0.5, b - a);
-  const newSpanU = (span / 100) * n;
+  const newSpanU = (span / 100) * extent;
 
-  // 十字线所在 K 线在当前窗口内：锚定它，缩放后它停留在原屏幕位置，不逃出窗口
-  if (anchor != null && n > 1) {
-    const u = anchor + 0.5;
-    if (u >= a && u <= b) {
-      const f = Math.max(0, Math.min(1, (u - a) / spanU));
-      let a2 = u - f * newSpanU;
-      let b2 = a2 + newSpanU;
-      if (a2 < 0) {
-        a2 = 0;
-        b2 = newSpanU;
-      }
-      if (b2 > n) {
-        b2 = n;
-        a2 = Math.max(0, n - newSpanU);
-      }
-      applyZoom((a2 / n) * 100, (b2 / n) * 100);
-      return;
-    }
+  // 锚点：十字线所在 K 线在窗口内时用它；否则用窗口正中的 K 线（保证缩放稳定居中）
+  let u: number;
+  if (
+    holdAnchor != null &&
+    holdAnchor >= 0 &&
+    holdAnchor < n &&
+    holdAnchor >= a &&
+    holdAnchor <= b
+  ) {
+    u = holdAnchor;
+  } else {
+    u = Math.max(0, Math.min(extent, Math.round((a + b) / 2)));
   }
-
-  // 无有效锚点：围绕窗口中心缩放，两边对称收放，不再把最新 K 线挤向一侧
-  const c = (a + b) / 2;
-  let a2 = c - newSpanU / 2;
-  let b2 = c + newSpanU / 2;
+  const f = Math.max(0, Math.min(1, (u - a) / spanU));
+  let a2 = u - f * newSpanU;
+  let b2 = a2 + newSpanU;
   if (a2 < 0) {
     a2 = 0;
     b2 = newSpanU;
   }
-  if (b2 > n) {
-    b2 = n;
-    a2 = Math.max(0, n - newSpanU);
+  if (b2 > extent) {
+    b2 = extent;
+    a2 = Math.max(0, extent - newSpanU);
   }
-  applyZoom((a2 / n) * 100, (b2 / n) * 100);
+  applyZoom((a2 / extent) * 100, (b2 / extent) * 100);
 }
 
 function visibleIndexRange(): { lo: number; hi: number } {
