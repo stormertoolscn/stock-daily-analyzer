@@ -59,8 +59,6 @@ let savedZoom: { start: number; end: number } | null = null;
 let lastBarsKey = "";
 /** 键盘/鼠标十字线当前位置（bars 下标） */
 let cursorIndex: number | null = null;
-/** 鼠标/键盘十字线当前是否可见（决定缩放锚点） */
-let crosshairActive = false;
 /** 按住方向键缩放时锁定的锚点 K 线（避免逐 tick 漂移） */
 let holdAnchor: number | null = null;
 
@@ -137,7 +135,8 @@ function applyZoom(start: number, end: number) {
 }
 
 /** ↑ 收缩（放大）；↓ 放开（缩小）。
- * 有十字线时锚定十字线所在 K 线（缩放后它不逃出窗口）；否则锚定右侧最新。 */
+ * 有十字线（含键盘留下的竖线位置）时锚定它所在 K 线，缩放后不逃出窗口；
+ * 否则围绕当前窗口中心缩放，不把最新 K 线锁死在右端。 */
 function zoomStep(direction: "in" | "out") {
   if (!chart || !props.bars.length) return;
   const n = props.bars.length;
@@ -156,40 +155,44 @@ function zoomStep(direction: "in" | "out") {
 
   const anchor =
     holdAnchor != null && holdAnchor >= 0 && holdAnchor < n ? holdAnchor : null;
+  const a = (start / 100) * n;
+  const b = (end / 100) * n;
+  const spanU = Math.max(0.5, b - a);
+  const newSpanU = (span / 100) * n;
+
+  // 十字线所在 K 线在当前窗口内：锚定它，缩放后它停留在原屏幕位置，不逃出窗口
   if (anchor != null && n > 1) {
-    // 锚定十字线所在 K 线：按其在窗口内的比例，让它在缩放后仍停留在原屏幕位置
-    const a = (start / 100) * n;
-    const b = (end / 100) * n;
-    const spanU = Math.max(0.5, b - a);
     const u = anchor + 0.5;
-    const f = Math.max(0, Math.min(1, (u - a) / spanU));
-    const newSpanU = (span / 100) * n;
-    let a2 = u - f * newSpanU;
-    let b2 = a2 + newSpanU;
-    if (a2 < 0) {
-      a2 = 0;
-      b2 = newSpanU;
+    if (u >= a && u <= b) {
+      const f = Math.max(0, Math.min(1, (u - a) / spanU));
+      let a2 = u - f * newSpanU;
+      let b2 = a2 + newSpanU;
+      if (a2 < 0) {
+        a2 = 0;
+        b2 = newSpanU;
+      }
+      if (b2 > n) {
+        b2 = n;
+        a2 = Math.max(0, n - newSpanU);
+      }
+      applyZoom((a2 / n) * 100, (b2 / n) * 100);
+      return;
     }
-    if (b2 > n) {
-      b2 = n;
-      a2 = Math.max(0, n - newSpanU);
-    }
-    applyZoom((a2 / n) * 100, (b2 / n) * 100);
-    return;
   }
 
-  // 无十字线：保持现有右端锚定行为
-  let nextEnd = end;
-  let nextStart = nextEnd - span;
-  if (nextStart < 0) {
-    nextStart = 0;
-    nextEnd = Math.min(100, span);
+  // 无有效锚点：围绕窗口中心缩放，两边对称收放，不再把最新 K 线挤向一侧
+  const c = (a + b) / 2;
+  let a2 = c - newSpanU / 2;
+  let b2 = c + newSpanU / 2;
+  if (a2 < 0) {
+    a2 = 0;
+    b2 = newSpanU;
   }
-  if (nextEnd > 100) {
-    nextEnd = 100;
-    nextStart = Math.max(0, nextEnd - span);
+  if (b2 > n) {
+    b2 = n;
+    a2 = Math.max(0, n - newSpanU);
   }
-  applyZoom(nextStart, nextEnd);
+  applyZoom((a2 / n) * 100, (b2 / n) * 100);
 }
 
 function visibleIndexRange(): { lo: number; hi: number } {
@@ -233,7 +236,6 @@ function showCursorAt(idx: number) {
   const n = props.bars.length;
   const i = Math.max(0, Math.min(n - 1, idx));
   cursorIndex = i;
-  crosshairActive = true;
   ensureCursorVisible(i);
 
   // dataZoom 后坐标系会变，下一帧再取像素，保证竖线贴准
@@ -367,8 +369,8 @@ function onKeyDown(e: KeyboardEvent) {
   e.preventDefault();
 
   if (key === "ArrowUp" || key === "ArrowDown") {
-    // 十字线可见时锁定该 K 线为缩放锚点；否则保持右端锚定
-    holdAnchor = crosshairActive ? cursorIndex : null;
+    // 锁定十字线所在（或最后一次所在）的 K 线为缩放锚点；没有则围绕窗口中心缩放
+    holdAnchor = cursorIndex;
     startHold(key, () =>
       key === "ArrowUp" ? zoomStep("in") : zoomStep("out"),
     );
@@ -469,10 +471,8 @@ function handleAxisPointer(event: unknown) {
         );
   if (idx >= 0) {
     cursorIndex = idx;
-    crosshairActive = true;
     emit("update:hoverIndex", idx);
   } else {
-    crosshairActive = false;
     emit("update:hoverIndex", null);
   }
 }
@@ -554,7 +554,6 @@ onMounted(() => {
   chart = echarts.init(containerRef.value, undefined, { renderer: "canvas" });
   // 鼠标离开时不清空键盘十字位置，便于继续用方向键移动
   chart.getZr().on("globalout", () => {
-    crosshairActive = false;
     if (cursorIndex == null) emit("update:hoverIndex", null);
   });
   chart.on("updateAxisPointer", handleAxisPointer);
