@@ -15,6 +15,19 @@ export interface KlineApiResponse {
   bars: KlineBar[];
 }
 
+/** 会话内 K 线内存缓存：切回看过的股票秒开；日/周/月 K 10 分钟内不过期 */
+const KLINE_CACHE_TTL_MS = 10 * 60 * 1000;
+const klineCache = new Map<string, { at: number; data: KlineApiResponse }>();
+
+function klineCacheKey(
+  code: string,
+  period: KlinePeriod,
+  adjust: string,
+  tradeDate?: string | null,
+): string {
+  return `${code}|${period}|${adjust}|${tradeDate ?? ""}`;
+}
+
 export interface StockSearchItem {
   code: string;
   name: string;
@@ -60,11 +73,26 @@ export async function fetchStockKline(
   if (period === "intraday" && opts?.tradeDate) {
     params.set("trade_date", opts.tradeDate);
   }
+  const cacheable = period !== "intraday";
+  const key = klineCacheKey(code, period, adjust, opts?.tradeDate);
+  if (cacheable) {
+    const hit = klineCache.get(key);
+    if (hit && Date.now() - hit.at < KLINE_CACHE_TTL_MS) {
+      if (signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      return hit.data;
+    }
+  }
   const res = await fetch(`/api/stock/${encodeURIComponent(code)}/kline?${params}`, {
     signal,
   });
   if (!res.ok) throw new ApiError(res.status, await readError(res));
-  return (await res.json()) as KlineApiResponse;
+  const payload = (await res.json()) as KlineApiResponse;
+  if (cacheable && payload.bars?.length) {
+    klineCache.set(key, { at: Date.now(), data: payload });
+  }
+  return payload;
 }
 
 export async function searchStocks(

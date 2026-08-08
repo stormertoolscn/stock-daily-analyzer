@@ -10,6 +10,16 @@ export interface WatchStock {
 }
 
 const STORAGE_KEY = "sda-kline-watchlist";
+const ACTIVE_KEY = "sda-kline-active";
+
+/** 记住上次查看的股票，避免每次打开都回到默认股 */
+function loadLastActive(): string {
+  try {
+    return (localStorage.getItem(ACTIVE_KEY) || "").trim();
+  } catch {
+    return "";
+  }
+}
 
 /** 支持 688825 / SH:688825 / N长鑫(SH:688825) / A06978 */
 function normalizeStockCode(code: string): string | null {
@@ -41,9 +51,24 @@ function loadInitial(): WatchStock[] {
   ];
 }
 
-export function useWatchlist(initialCode = "600221") {
+export function useWatchlist(initialCode = "") {
   const list = ref<WatchStock[]>(loadInitial());
-  const activeCode = ref(initialCode);
+  const savedActive = loadLastActive();
+  const savedInList = savedActive && list.value.some((s) => s.code === savedActive);
+  const initial =
+    initialCode.trim() || (savedInList ? savedActive : "") || list.value[0]?.code || "600221";
+  const activeCode = ref(initial);
+
+  watch(
+    activeCode,
+    (code) => {
+      try {
+        localStorage.setItem(ACTIVE_KEY, code);
+      } catch {
+        /* ignore */
+      }
+    },
+  );
 
   watch(
     list,

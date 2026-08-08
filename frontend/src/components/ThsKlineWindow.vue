@@ -57,7 +57,7 @@ const ADJUST_MAP = {
 
 function routeStockCode(): string {
   const c = typeof route.query.code === "string" ? route.query.code.trim() : "";
-  return /^\d{4,6}$/.test(c) ? c.padStart(6, "0") : "600221";
+  return /^\d{4,6}$/.test(c) ? c.padStart(6, "0") : "";
 }
 
 const {
@@ -126,6 +126,8 @@ function openResearchOnly() {
 
 const codeInput = ref("");
 const hint = ref("");
+/** 当前正在加载/等待的目标股票名称（避免标题闪旧股） */
+const pendingName = ref<string | null>(null);
 const period = ref<KlinePeriod>("day");
 /** 分时指定交易日（YYYY-MM-DD）；空则最新交易日 */
 const intradayDate = ref<string | null>(null);
@@ -268,6 +270,7 @@ async function applyRouteStock() {
     }
   }
   if (!code) return;
+  pendingName.value = name || code || null;
   addStock(code, name || undefined);
 }
 
@@ -284,6 +287,14 @@ const visibleVolMaLines = computed(() =>
 );
 
 const engine = createKlineEngine({ theme: getAShareTheme() });
+
+/** 标题展示：加载中优先显示目标股票，避免显示自选列表兜底股 */
+const displayStock = computed(() => {
+  if (pendingName.value) {
+    return { code: activeCode.value, name: pendingName.value };
+  }
+  return active.value ?? { code: activeCode.value, name: activeCode.value };
+});
 const isIntraday = computed(() => period.value === "intraday");
 
 function resetIntradayRange(n: number) {
@@ -382,6 +393,8 @@ async function loadBars() {
     }
     const dayHint = data.trade_date ? ` · ${data.trade_date}` : "";
     hint.value = `${data.name ?? code} · ${data.count} 根 · ${data.source}${dayHint}`;
+    pendingName.value = null;
+    scheduleWatchlistPrefetch(code);
   } catch (err) {
     if ((err as Error).name === "AbortError" || seq !== loadSeq) return;
     bars.value = [];
@@ -471,10 +484,16 @@ async function runSearch(q: string) {
 
 watch(codeInput, (v) => scheduleSearch(v));
 
+function selectStock(stock: { code: string; name?: string | null }) {
+  pendingName.value = stock.name || stock.code || null;
+  select(stock.code);
+}
+
 function pickSuggestion(item: StockSearchItem) {
   showSuggest.value = false;
   suggestions.value = [];
   codeInput.value = "";
+  pendingName.value = item.name || null;
   const result = addStock(item.code, item.name);
   hint.value = result.message;
 }
@@ -530,11 +549,39 @@ function onSearchBlur() {
   }, 150);
 }
 
+let prefetchTimer: ReturnType<typeof setTimeout> | null = null;
+let prefetchAbort: AbortController | null = null;
+
+/** 加载完成后，后台预热自选里其他股票的日 K 缓存（服务端 CSV + 前端内存），切换时秒开 */
+function scheduleWatchlistPrefetch(currentCode: string) {
+  if (prefetchTimer) clearTimeout(prefetchTimer);
+  prefetchTimer = setTimeout(() => {
+    prefetchTimer = null;
+    void prefetchWatchlist(currentCode);
+  }, 1200);
+}
+
+async function prefetchWatchlist(currentCode: string) {
+  prefetchAbort?.abort();
+  prefetchAbort = new AbortController();
+  const targets = list.value.filter((s) => s.code !== currentCode).slice(0, 3);
+  for (const s of targets) {
+    if (prefetchAbort.signal.aborted) return;
+    try {
+      await fetchStockKline(s.code, "day", "qfq", prefetchAbort.signal);
+    } catch {
+      /* 预热失败静默，不影响主流程 */
+    }
+  }
+}
+
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onMaSettingsKeydown);
   window.removeEventListener("keydown", onHistoryBackKey);
   abortCtrl?.abort();
   searchCtrl?.abort();
+  prefetchAbort?.abort();
+  if (prefetchTimer) clearTimeout(prefetchTimer);
   if (searchTimer) clearTimeout(searchTimer);
   onSidebarResizeUp();
 });
@@ -641,7 +688,7 @@ function priceColor(up: boolean): string {
             :key="stock.code"
             class="ths-stock-item"
             :class="{ 'ths-stock-item-active': stock.code === activeCode }"
-            @click="select(stock.code)"
+            @click="selectStock(stock)"
             @contextmenu="openStockContextMenu($event, stock)"
           >
             <div class="ths-stock-main">
@@ -686,8 +733,8 @@ function priceColor(up: boolean): string {
         <header class="ths-header">
           <div class="ths-identity">
             <div class="ths-name-row">
-              <h2 class="ths-name">{{ active?.name ?? "—" }}</h2>
-              <span class="ths-code">{{ active?.code ?? "" }}</span>
+              <h2 class="ths-name">{{ displayStock.name }}</h2>
+              <span class="ths-code">{{ displayStock.code }}</span>
             </div>
             <div class="ths-price-block">
               <span
@@ -1080,7 +1127,7 @@ function priceColor(up: boolean): string {
           >
             ×
           </button>
-          <div v-if="loading" class="ths-chart-state">正在拉取行情…</div>
+          <div v-if="loading" class="ths-chart-state">正在加载 {{ displayStock.name }}…</div>
           <div v-else-if="loadError" class="ths-chart-state ths-chart-error">
             {{ loadError }}
             <button type="button" class="ths-retry" @click="loadBars">重试</button>
