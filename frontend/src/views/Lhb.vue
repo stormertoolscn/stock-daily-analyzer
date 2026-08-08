@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 
 import {
   fetchLhbDaily,
@@ -18,6 +19,7 @@ function todayIso(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+const router = useRouter();
 const tradeDate = ref(todayIso());
 const loadingList = ref(false);
 const loadingSeats = ref(false);
@@ -106,6 +108,14 @@ async function selectItem(item: LhbDailyItem) {
   }
 }
 
+/** 双击个股 → K 线复盘 */
+function openKline(item: LhbDailyItem) {
+  void router.push({
+    name: "kline",
+    query: { code: item.code, name: item.name },
+  });
+}
+
 watch(tradeDate, () => {
   // 用户改日期后再点查询，避免每个按键都请求
 });
@@ -139,6 +149,13 @@ loadDaily();
           <button type="button" class="btn btn-primary" :disabled="loadingList" @click="loadDaily">
             {{ loadingList ? "加载中…" : "查询" }}
           </button>
+          <router-link
+            class="btn"
+            :to="{ path: '/lhb-v3', query: { tab: 'hotmoney', hm: 'hlha' } }"
+            title="追踪欢乐海岸 / 章盟主等一线游资交易"
+          >
+            游资追踪
+          </router-link>
           <span v-if="source" class="text-xs text-text-muted">数据源 {{ source }}</span>
         </div>
       </div>
@@ -188,7 +205,9 @@ loadDaily();
                   'bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]':
                     selected?.code === item.code && selected?.reason === item.reason,
                 }"
+                title="单击查看详情，双击打开K线"
                 @click="selectItem(item)"
+                @dblclick="openKline(item)"
               >
                 <td class="px-3 py-2 font-mono text-xs">{{ item.code }}</td>
                 <td class="px-3 py-2 font-medium">{{ item.name }}</td>

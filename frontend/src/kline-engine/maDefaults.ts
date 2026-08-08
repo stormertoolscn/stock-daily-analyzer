@@ -26,11 +26,11 @@ export const THS_MA_LINES = THS_MA_LINES_12.filter((l) => (l.width ?? 1) > 0).sl
 );
 
 /**
- * 量柱副图均线（对应通达信/同花顺常见 MAVOL）。
- * 公式里 MVP5/MVP* 是量能均线；默认 MA5 / MA10 / MA120。
+ * 量柱副图均线 —— 对齐用户通达信公式：
+ * MVP5(#006464 虚线) / MVP35 / MVP135(#FFCC66 粗)
  */
 export const THS_VOL_MA_LINES: MaLineStyle[] = [
-  { period: 5, color: "#006464", name: "MA5", width: 1 },
-  { period: 10, color: "#a155a1", name: "MA10", width: 1 },
-  { period: 120, color: "#ffcc66", name: "MA120", width: 1.5 },
+  { period: 5, color: "#006464", name: "MVP5", width: 1, lineType: "dotted" },
+  { period: 35, color: "#8b9199", name: "MVP35", width: 1 },
+  { period: 135, color: "#ffcc66", name: "MVP135", width: 3 },
 ];

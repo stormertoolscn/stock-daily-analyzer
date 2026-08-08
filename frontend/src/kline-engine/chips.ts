@@ -46,7 +46,7 @@ export function computeChipDistribution(
 ): ChipDistribution | null {
   if (!bars.length || asOfIndex < 0 || asOfIndex >= bars.length) return null;
 
-  const binCount = options.binCount ?? 80;
+  const binCount = options.binCount ?? 240;
   const decayScale = options.decayScale ?? 0.12;
   const maxDecay = options.maxDecay ?? 0.28;
 
@@ -110,7 +110,7 @@ export function computeChipDistribution(
   };
 }
 
-/** 把当日成交量按三角分布铺到 [low, high]，峰值在 close。 */
+/** 把当日成交量按尖峰三角铺到 [low, high]，峰值在 close（火焰山尖峰）。 */
 function distributeTriangle(
   chips: Float64Array,
   minP: number,
@@ -137,10 +137,12 @@ function distributeTriangle(
   let weightSum = 0;
   const weights = new Float64Array(i1 - i0 + 1);
   for (let i = i0; i <= i1; i += 1) {
-    const w =
+    // 幂次 >1：更集中在收盘价附近，形成尖峰
+    const base =
       i <= peak
         ? (i - i0 + 1) / (peak - i0 + 1)
         : (i1 - i + 1) / (i1 - peak + 1);
+    const w = Math.max(0.02, base) ** 2.4;
     weights[i - i0] = w;
     weightSum += w;
   }
@@ -151,4 +153,7 @@ function distributeTriangle(
   for (let i = i0; i <= i1; i += 1) {
     chips[i] += (bar.volume * weights[i - i0]) / weightSum;
   }
+  // 额外把约 35% 量砸到峰桶，强化尖峰
+  const spike = bar.volume * 0.35;
+  chips[peak] += spike;
 }

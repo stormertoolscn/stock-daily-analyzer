@@ -5,10 +5,14 @@
  * 行情走 /api/stock/{code}/kline（market_data 真源）。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import { fetchStockKline, searchStocks, type StockSearchItem } from "@/api/stock";
 import ChipDistribution from "@/components/ChipDistribution.vue";
+import IntradayFundPanel from "@/components/IntradayFundPanel.vue";
+import IntradayRangeScrubber from "@/components/IntradayRangeScrubber.vue";
 import KlineChart from "@/components/KlineChart.vue";
+import { useResearchList } from "@/composables/useResearchList";
 import { useWatchlist } from "@/composables/useWatchlist";
 import {
   createKlineEngine,
@@ -19,7 +23,22 @@ import {
   type KlineQuoteSnapshot,
 } from "@/kline-engine";
 import { useMaConfig } from "@/composables/useMaConfig";
+import { computeIntradayFundStats } from "@/utils/intradayFundFlow";
 import type { KlinePeriod } from "@/utils/mockKline";
+
+const route = useRoute();
+const router = useRouter();
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return (
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    target.isContentEditable
+  );
+}
 
 const PERIODS: { id: KlinePeriod; label: string }[] = [
   { id: "intraday", label: "分时" },
@@ -36,6 +55,11 @@ const ADJUST_MAP = {
   不复权: "none",
 } as const;
 
+function routeStockCode(): string {
+  const c = typeof route.query.code === "string" ? route.query.code.trim() : "";
+  return /^\d{4,6}$/.test(c) ? c.padStart(6, "0") : "600221";
+}
+
 const {
   list,
   activeCode,
@@ -44,7 +68,61 @@ const {
   addStock,
   remove,
   updateQuote,
-} = useWatchlist("600221");
+} = useWatchlist(routeStockCode());
+
+const { addStock: addResearch, has: hasResearch } = useResearchList();
+
+const ctxMenu = ref<{
+  x: number;
+  y: number;
+  code: string;
+  name: string;
+  price: number;
+  changePct: number;
+} | null>(null);
+
+function openStockContextMenu(
+  e: MouseEvent,
+  stock: { code: string; name: string; price: number; changePct: number },
+) {
+  e.preventDefault();
+  ctxMenu.value = {
+    x: e.clientX,
+    y: e.clientY,
+    code: stock.code,
+    name: stock.name,
+    price: stock.price,
+    changePct: stock.changePct,
+  };
+}
+
+function closeStockContextMenu() {
+  ctxMenu.value = null;
+}
+
+function addToResearchFromMenu() {
+  const m = ctxMenu.value;
+  if (!m) return;
+  if (hasResearch(m.code)) {
+    closeStockContextMenu();
+    void router.push({ name: "research", query: { code: m.code } });
+    return;
+  }
+  const result = addResearch(m.code, m.name, {
+    price: m.price,
+    changePct: m.changePct,
+  });
+  hint.value = result.message;
+  closeStockContextMenu();
+  void router.push({ name: "research", query: { code: m.code } });
+}
+
+function openResearchOnly() {
+  const m = ctxMenu.value;
+  if (!m) return;
+  closeStockContextMenu();
+  void router.push({ name: "research", query: { code: m.code } });
+}
 
 const codeInput = ref("");
 const hint = ref("");
@@ -56,8 +134,14 @@ const adjustMode = ref<keyof typeof ADJUST_MAP>("前复权");
 /** 跳空缺口显示，默认打开（同花顺「显示缺口」） */
 const showGaps = ref(localStorage.getItem("sda-show-gaps") !== "0");
 const showFeatures = ref(localStorage.getItem("sda-show-features") !== "0");
+/** K 线特征文字/色块提示，默认打开；关闭后只保留红绿 K + 均线 */
+const showTips = ref(localStorage.getItem("sda-show-tips") !== "0");
 /** 分时集合竞价，默认打开（同花顺「竞」） */
 const showAuction = ref(localStorage.getItem("sda-show-auction") !== "0");
+/** 分时顶部资金参考图（实时龙虎榜）；推拉进度条后出现 */
+const showFundPanel = ref(false);
+const rangeStart = ref(0);
+const rangeEnd = ref(0);
 const hoverIndex = ref<number | null>(null);
 const bars = ref<KlineBar[]>([]);
 const chartMode = ref<ChartMode>("candle");
@@ -83,15 +167,18 @@ watch(chipOpen, (v) => localStorage.setItem("sda-chip-open", v ? "1" : "0"));
 watch(chipWidth, (v) => localStorage.setItem("sda-chip-width", String(v)));
 watch(showGaps, (v) => localStorage.setItem("sda-show-gaps", v ? "1" : "0"));
 watch(showFeatures, (v) => localStorage.setItem("sda-show-features", v ? "1" : "0"));
+watch(showTips, (v) => localStorage.setItem("sda-show-tips", v ? "1" : "0"));
 watch(showAuction, (v) => localStorage.setItem("sda-show-auction", v ? "1" : "0"));
 watch(sidebarWidth, (v) => localStorage.setItem("sda-sidebar-width", String(v)));
 
 let sidebarDragging = false;
 let sidebarStartX = 0;
 let sidebarStartW = 0;
+const sidebarResizing = ref(false);
 
 function onSidebarResizeDown(e: MouseEvent) {
   sidebarDragging = true;
+  sidebarResizing.value = true;
   sidebarStartX = e.clientX;
   sidebarStartW = sidebarWidth.value;
   document.body.style.cursor = "col-resize";
@@ -112,6 +199,7 @@ function onSidebarResizeMove(e: MouseEvent) {
 
 function onSidebarResizeUp() {
   sidebarDragging = false;
+  sidebarResizing.value = false;
   document.body.style.cursor = "";
   document.body.style.userSelect = "";
   window.removeEventListener("mousemove", onSidebarResizeMove);
@@ -123,7 +211,8 @@ const showSuggest = ref(false);
 const suggestActive = ref(0);
 const searching = ref(false);
 
-const { maLines, volMaLines, resetMa, resetVolMa } = useMaConfig();
+const { maLines, volMaLines, macdParams, resetMa, resetVolMa, resetMacd } =
+  useMaConfig();
 const maSettingsOpen = ref(false);
 
 function closeMaSettings() {
@@ -137,9 +226,55 @@ function onMaSettingsKeydown(e: KeyboardEvent) {
   }
 }
 
+/** Backspace / Alt+←：返回上一页（游资追踪等） */
+function onHistoryBackKey(e: KeyboardEvent) {
+  if (isTypingTarget(e.target)) return;
+  const backspace = e.key === "Backspace" && !e.altKey && !e.ctrlKey && !e.metaKey;
+  const altLeft = e.altKey && e.key === "ArrowLeft";
+  if (!backspace && !altLeft) return;
+  e.preventDefault();
+  router.back();
+}
+
 onMounted(() => {
   window.addEventListener("keydown", onMaSettingsKeydown);
+  window.addEventListener("keydown", onHistoryBackKey);
+  applyRouteStock();
 });
+
+/** 龙虎榜等页面双击跳转：/kline?code=000021&name=深科技 */
+async function applyRouteStock() {
+  let code = typeof route.query.code === "string" ? route.query.code.trim() : "";
+  let name = typeof route.query.name === "string" ? route.query.name.trim() : "";
+  // 名称里可能已带代码：平煤股份（601666）
+  const embedded = name.match(/（(\d{6})）|\((\d{6})\)$/);
+  if (!code && embedded) {
+    code = embedded[1] || embedded[2] || "";
+    name = name.replace(/（\d{6}）|\(\d{6}\)$/, "").trim();
+  }
+  if (!code && name) {
+    try {
+      const hits = await searchStocks(name, 5);
+      const hit =
+        hits.find((h) => h.name === name) ||
+        hits.find((h) => name.includes(h.name) || h.name.includes(name)) ||
+        hits[0];
+      if (hit) {
+        code = hit.code;
+        name = hit.name;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  if (!code) return;
+  addStock(code, name || undefined);
+}
+
+watch(
+  () => [route.query.code, route.query.name] as const,
+  () => applyRouteStock(),
+);
 
 const visibleMaLines = computed(() =>
   maLines.value.filter((l) => l.period > 0 && (l.width ?? 1) > 0),
@@ -151,37 +286,89 @@ const visibleVolMaLines = computed(() =>
 const engine = createKlineEngine({ theme: getAShareTheme() });
 const isIntraday = computed(() => period.value === "intraday");
 
+function resetIntradayRange(n: number) {
+  rangeStart.value = 0;
+  rangeEnd.value = Math.max(0, n - 1);
+}
+
+const fundStats = computed(() => {
+  if (!isIntraday.value || !bars.value.length) return null;
+  return computeIntradayFundStats(
+    bars.value,
+    rangeStart.value,
+    rangeEnd.value,
+    prevClose.value,
+  );
+});
+
+function onFundScrub() {
+  showFundPanel.value = true;
+}
+
+const scrubberLabels = computed(() => {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return bars.value.map((b) => {
+    const d = new Date(b.timestamp);
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  });
+});
+
 let abortCtrl: AbortController | null = null;
 let searchCtrl: AbortController | null = null;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
+/** 防止切换股票时旧请求回写，造成「名称是 A、K 线是 B」 */
+let loadSeq = 0;
+/** 当前 bars 对应的股票代码（用于切股时立刻清空旧图） */
+let barsCode = "";
 
 async function loadBars() {
   const code = activeCode.value;
+  const seq = ++loadSeq;
   abortCtrl?.abort();
   abortCtrl = new AbortController();
+  const signal = abortCtrl.signal;
   loading.value = true;
   loadError.value = "";
   hoverIndex.value = null;
+  if (code !== barsCode) {
+    bars.value = [];
+    prevClose.value = null;
+    dataSource.value = "";
+    dataCount.value = 0;
+    hint.value = "加载中…";
+  }
 
   try {
     const data = await fetchStockKline(
       code,
       period.value,
       ADJUST_MAP[adjustMode.value],
-      abortCtrl.signal,
+      signal,
       {
         tradeDate:
           period.value === "intraday" ? intradayDate.value : null,
       },
     );
+    if (seq !== loadSeq || code !== activeCode.value || signal.aborted) return;
+    // 防御：接口返回代码与请求不一致时拒绝写盘
+    if (data.code && data.code !== code) {
+      loadError.value = `行情串号：请求 ${code}，返回 ${data.code}`;
+      hint.value = loadError.value;
+      return;
+    }
+    barsCode = code;
     bars.value = data.bars;
     chartMode.value =
       data.chart_type ?? (period.value === "intraday" ? "intraday" : "candle");
     prevClose.value = data.prev_close;
     dataSource.value = data.source;
     dataCount.value = data.count;
-    if (period.value === "intraday" && data.trade_date) {
-      intradayDate.value = data.trade_date;
+    if (period.value === "intraday") {
+      resetIntradayRange(data.bars.length);
+      // 仅在服务端回写不同日期时更新，避免 watch(intradayDate) 重复拉取
+      if (data.trade_date && data.trade_date !== intradayDate.value) {
+        intradayDate.value = data.trade_date;
+      }
     }
     const last = data.bars[data.bars.length - 1];
     if (last) {
@@ -196,8 +383,9 @@ async function loadBars() {
     const dayHint = data.trade_date ? ` · ${data.trade_date}` : "";
     hint.value = `${data.name ?? code} · ${data.count} 根 · ${data.source}${dayHint}`;
   } catch (err) {
-    if ((err as Error).name === "AbortError") return;
+    if ((err as Error).name === "AbortError" || seq !== loadSeq) return;
     bars.value = [];
+    barsCode = "";
     chartMode.value = "candle";
     prevClose.value = null;
     dataSource.value = "";
@@ -205,7 +393,7 @@ async function loadBars() {
     loadError.value = err instanceof Error ? err.message : "行情加载失败";
     hint.value = loadError.value;
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
 }
 
@@ -221,12 +409,33 @@ function setPeriod(next: KlinePeriod) {
 
 function onCandleDblClick(index: number) {
   if (period.value !== "day") return;
-  const bar = bars.value[index];
+  // 优先用十字线位置（dataZoom filter 时 dataIndex 可能对不齐）
+  const idx =
+    hoverIndex.value != null && hoverIndex.value >= 0
+      ? hoverIndex.value
+      : index;
+  const bar = bars.value[idx] ?? bars.value[index];
   if (!bar) return;
-  const d = new Date(bar.timestamp);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  intradayDate.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const dateStr = shanghaiDate(bar.timestamp);
+  if (!dateStr) return;
+  intradayDate.value = dateStr;
   period.value = "intraday";
+}
+
+/** K 线时间戳按上海日历日格式化为 YYYY-MM-DD */
+function shanghaiDate(ts: number): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(ts));
+  } catch {
+    const d = new Date(ts);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
 }
 
 watch([activeCode, period, adjustMode], loadBars, { immediate: true });
@@ -323,6 +532,7 @@ function onSearchBlur() {
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onMaSettingsKeydown);
+  window.removeEventListener("keydown", onHistoryBackKey);
   abortCtrl?.abort();
   searchCtrl?.abort();
   if (searchTimer) clearTimeout(searchTimer);
@@ -432,6 +642,7 @@ function priceColor(up: boolean): string {
             class="ths-stock-item"
             :class="{ 'ths-stock-item-active': stock.code === activeCode }"
             @click="select(stock.code)"
+            @contextmenu="openStockContextMenu($event, stock)"
           >
             <div class="ths-stock-main">
               <span class="ths-stock-name">{{ stock.name }}</span>
@@ -465,6 +676,7 @@ function priceColor(up: boolean): string {
 
       <div
         class="ths-split"
+        :class="{ 'ths-split-active': sidebarResizing }"
         title="拖拽调节左右宽度"
         @mousedown="onSidebarResizeDown"
       />
@@ -543,6 +755,16 @@ function priceColor(up: boolean): string {
               缺口
             </button>
             <button
+              v-if="!isIntraday"
+              type="button"
+              class="ths-gap-btn"
+              :class="{ 'ths-gap-btn-on': showTips }"
+              title="日K：涨停/破板等；各周期：岛型反转/壹泽洗（关闭后仅红绿K与均线）"
+              @click="showTips = !showTips"
+            >
+              提示
+            </button>
+            <button
               v-if="isIntraday"
               type="button"
               class="ths-gap-btn"
@@ -551,6 +773,16 @@ function priceColor(up: boolean): string {
               @click="showAuction = !showAuction"
             >
               竞
+            </button>
+            <button
+              v-if="isIntraday"
+              type="button"
+              class="ths-gap-btn"
+              :class="{ 'ths-gap-btn-on': showFundPanel }"
+              title="分时资金参考图（推拉底部进度条动态更新）"
+              @click="showFundPanel = !showFundPanel"
+            >
+              资金
             </button>
           </div>
         </header>
@@ -737,6 +969,52 @@ function priceColor(up: boolean): string {
                   <p class="ths-ma-tip">
                     线宽=0 表示不可见；量柱红绿仍按涨跌默认。
                   </p>
+                  <div class="ths-ma-settings-title" style="margin-top: 14px">
+                    <span>MACD 线</span>
+                    <button type="button" class="ths-ma-reset" @click="resetMacd">
+                      恢复默认
+                    </button>
+                  </div>
+                  <div class="ths-ma-row">
+                    <span class="ths-ma-idx">S</span>
+                    <label>
+                      SHORT
+                      <input
+                        v-model.number="macdParams.short"
+                        type="number"
+                        min="2"
+                        max="200"
+                      />
+                    </label>
+                  </div>
+                  <div class="ths-ma-row">
+                    <span class="ths-ma-idx">L</span>
+                    <label>
+                      LONG
+                      <input
+                        v-model.number="macdParams.long"
+                        type="number"
+                        min="3"
+                        max="300"
+                      />
+                    </label>
+                  </div>
+                  <div class="ths-ma-row">
+                    <span class="ths-ma-idx">M</span>
+                    <label>
+                      MM
+                      <input
+                        v-model.number="macdParams.mm"
+                        type="number"
+                        min="2"
+                        max="100"
+                      />
+                    </label>
+                  </div>
+                  <p class="ths-ma-tip">
+                    DIF=EMA(C,S)-EMA(C,L)；DEA=EMA(DIF,MM)；MACD=(DIF-DEA)×2。默认
+                    12 / 26 / 9。柱：红+/青-；获利盘&gt;82% 洋红。
+                  </p>
                 </div>
               </div>
               <footer class="ths-ma-float-ft">
@@ -771,17 +1049,37 @@ function priceColor(up: boolean): string {
           <span v-if="!isIntraday" class="ths-macd-legend">
             <em style="color: var(--color-accent)">MACD</em>
             :
-            <em :style="{ color: priceColor(quote.macd.macd >= 0) }">{{
-              roundPrice(quote.macd.macd, 3)
-            }}</em>
+            <em
+              :style="{
+                color:
+                  quote.macd.macd >= 0 ? 'var(--color-up)' : '#00c2d4',
+              }"
+              >{{ roundPrice(quote.macd.macd, 3) }}</em
+            >
             DIF:
-            <em style="color: #b06cf0">{{ roundPrice(quote.macd.dif, 3) }}</em>
+            <em style="color: #e6a23c">{{ roundPrice(quote.macd.dif, 3) }}</em>
             DEA:
-            <em style="color: #6b7a99">{{ roundPrice(quote.macd.dea, 3) }}</em>
+            <em style="color: #9ca3af">{{ roundPrice(quote.macd.dea, 3) }}</em>
           </span>
         </div>
 
+        <IntradayFundPanel
+          v-if="isIntraday && showFundPanel && !loading && !loadError"
+          :stats="fundStats"
+        />
+
         <div class="ths-chart-wrap">
+          <!-- 浮动半透明关闭：K 线区右侧 -->
+          <button
+            v-if="isIntraday && showFundPanel && !loading && !loadError"
+            type="button"
+            class="ths-fund-close"
+            title="关闭资金图"
+            aria-label="关闭资金图"
+            @click="showFundPanel = false"
+          >
+            ×
+          </button>
           <div v-if="loading" class="ths-chart-state">正在拉取行情…</div>
           <div v-else-if="loadError" class="ths-chart-state ths-chart-error">
             {{ loadError }}
@@ -795,14 +1093,28 @@ function priceColor(up: boolean): string {
                 :prev-close="prevClose"
                 :show-gaps="showGaps"
                 :show-auction="showAuction"
-                :show-features="showFeatures"
+                :show-features="showTips && showFeatures"
+                :kline-period="period"
                 :stock-code="activeCode"
                 :stock-name="active?.name"
                 :ma-lines="maLines"
                 :vol-ma-lines="volMaLines"
+                :macd-short="macdParams.short"
+                :macd-long="macdParams.long"
+                :macd-mm="macdParams.mm"
+                :range-start="isIntraday && showFundPanel ? rangeStart : null"
+                :range-end="isIntraday && showFundPanel ? rangeEnd : null"
                 @update:hover-index="hoverIndex = $event"
                 @update:price-extent="priceExtent = $event"
                 @dblclick-bar="onCandleDblClick"
+              />
+              <IntradayRangeScrubber
+                v-if="isIntraday && bars.length"
+                v-model:start="rangeStart"
+                v-model:end="rangeEnd"
+                :length="bars.length"
+                :labels="scrubberLabels"
+                @scrub="onFundScrub"
               />
             </div>
             <ChipDistribution
@@ -840,6 +1152,34 @@ function priceColor(up: boolean): string {
         </footer>
       </section>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="ctxMenu"
+        class="ths-ctx-backdrop"
+        @click="closeStockContextMenu"
+        @contextmenu.prevent="closeStockContextMenu"
+      >
+        <div
+          class="ths-ctx-menu"
+          :style="{ left: `${ctxMenu.x}px`, top: `${ctxMenu.y}px` }"
+          @click.stop
+        >
+          <div class="ths-ctx-title">{{ ctxMenu.name }} {{ ctxMenu.code }}</div>
+          <button type="button" class="ths-ctx-item" @click="addToResearchFromMenu">
+            {{ hasResearch(ctxMenu.code) ? "打开重点研究" : "加入重点研究" }}
+          </button>
+          <button
+            v-if="hasResearch(ctxMenu.code)"
+            type="button"
+            class="ths-ctx-item"
+            @click="openResearchOnly"
+          >
+            仅跳转重点研究
+          </button>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -1024,28 +1364,42 @@ function priceColor(up: boolean): string {
   min-width: 0;
 }
 
+/* 分栏：默认细线；悬停超细；按住微加粗；颜色跟主题 --color-accent */
 .ths-split {
-  flex: 0 0 5px;
-  width: 5px;
+  flex: 0 0 8px;
+  width: 8px;
+  margin: 0 -3px;
   cursor: col-resize;
   position: relative;
   z-index: 3;
-  background: var(--color-border);
-  transition: background 0.12s ease;
+  background: transparent;
 }
 
-.ths-split::after {
+.ths-split::before {
   content: "";
   position: absolute;
   top: 0;
   bottom: 0;
-  left: -3px;
-  right: -3px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--color-accent) 45%, transparent);
+  border-radius: 1px;
+  pointer-events: none;
+  transition:
+    width 0.12s ease,
+    background 0.12s ease,
+    opacity 0.12s ease;
 }
 
-.ths-split:hover,
-.ths-split:active {
-  background: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+.ths-split:hover::before {
+  width: 1px;
+  background: var(--color-accent);
+}
+
+.ths-split-active::before {
+  width: 3px;
+  background: var(--color-accent);
 }
 
 .ths-sidebar-head {
@@ -1564,6 +1918,34 @@ function priceColor(up: boolean): string {
   position: relative;
 }
 
+/* 资金图关闭：浮在分时图右侧，半透明 */
+.ths-fund-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 20;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(80 80 80 / 38%);
+  color: rgb(255 255 255 / 92%);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.ths-fund-close:hover {
+  background: rgb(80 80 80 / 58%);
+  transform: scale(1.05);
+}
+
 .ths-chart-row {
   display: flex;
   align-items: stretch;
@@ -1581,6 +1963,14 @@ function priceColor(up: boolean): string {
   /* 避免裁掉 dataZoom 两侧拖动头 */
   overflow: visible;
   position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.ths-chart-main :deep(.ths-chart-canvas) {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto !important;
 }
 
 .ths-chart-state {
@@ -1707,5 +2097,48 @@ function priceColor(up: boolean): string {
   .ths-actions {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+
+.ths-ctx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+}
+
+.ths-ctx-menu {
+  position: fixed;
+  min-width: 168px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+  box-shadow: 0 12px 32px color-mix(in srgb, #000 16%, transparent);
+  z-index: 81;
+}
+
+.ths-ctx-title {
+  padding: 6px 10px 8px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 4px;
+}
+
+.ths-ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.ths-ctx-item:hover {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent);
 }
 </style>

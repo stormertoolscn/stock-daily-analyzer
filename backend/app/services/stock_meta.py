@@ -28,6 +28,8 @@ _NAME_ALIASES: dict[str, str] = {
     "CXMT": "688825",
     "CX": "688825",
     "NCX": "688825",
+    "汉鑫科技": "920092",
+    "汉鑫": "920092",
 }
 
 # 新股临时代码校验：交易所前缀规则（用于提示，不拦检索）
@@ -240,13 +242,49 @@ def lookup_name(code: str) -> str | None:
     code = normalize_stock_code(code)
     if not code:
         return None
-    for row in get_stock_universe():
-        if row.code == code:
-            return row.name
+    # 只读已预热缓存，避免 K 线接口同步拉全市场（akshare tqdm 卡几十秒）
+    with _lock:
+        rows = _cache_rows
+    if rows:
+        for row in rows:
+            if row.code == code:
+                return row.name
     for alias, target in _NAME_ALIASES.items():
         if target == code and not alias.isascii():
             return alias
     return None
+
+
+def lookup_code_by_name(name: str) -> str | None:
+    """按股票简称反查 6 位代码；优先精确匹配，其次去 ST/*ST 前缀。"""
+    raw = (name or "").strip().replace(" ", "")
+    if not raw or raw.startswith("（"):
+        return None
+    # 已是代码
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 6:
+        return digits.zfill(6)
+
+    q = display_name(raw)
+    # 去掉常见前缀再比
+    stripped = re.sub(r"^(\*?ST|S|N|XD|XR|DR)", "", q, flags=re.IGNORECASE)
+
+    rows = get_stock_universe(force=False)
+    exact: str | None = None
+    soft: str | None = None
+    for row in rows:
+        if row.name == q or row.name == raw:
+            return row.code
+        if stripped and row.name == stripped:
+            exact = exact or row.code
+        if stripped and (stripped in row.name or row.name in stripped):
+            soft = soft or row.code
+    if exact:
+        return exact
+    for alias, code in _NAME_ALIASES.items():
+        if alias == q or alias == raw or alias == stripped:
+            return code
+    return soft
 
 
 def search_stocks(query: str, *, limit: int = 12) -> list[dict]:

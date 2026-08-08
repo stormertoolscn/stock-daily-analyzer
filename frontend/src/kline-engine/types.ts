@@ -42,6 +42,11 @@ export interface BuildOptionParams {
   showSlider?: boolean;
   /** 通达信风格特征叠加（涨停/破板/壹泽洗等），默认 true */
   showFeatures?: boolean;
+  /**
+   * K 线周期。周/月及以上不展示日线级「涨停/跌停/破板」等，
+   * 仍保留壹泽洗等形态类标注。
+   */
+  klinePeriod?: "intraday" | "day" | "week" | "month";
   /** 股票代码（用于涨跌停幅度：主板10%/创业科创20%/ST5%） */
   stockCode?: string;
   /** 股票名称（检测 ST） */
@@ -49,6 +54,14 @@ export interface BuildOptionParams {
   /** 保留当前 dataZoom 窗口（百分比 0–100） */
   zoomStart?: number;
   zoomEnd?: number;
+  /** 图表容器宽度（px），用于通达信风格柱宽随缩放变化 */
+  containerWidth?: number;
+  /** 分时区间高亮（实时龙虎榜）：bars 下标闭区间。 */
+  rangeHighlight?: { start: number; end: number } | null;
+  /** MACD 参数：SHORT / LONG / MM，默认 12 / 26 / 9 */
+  macdShort?: number;
+  macdLong?: number;
+  macdMm?: number;
 }
 
 /** 均线周期 / 颜色 / 线宽（远航版可自定义；width=0 不可见）。 */
@@ -58,6 +71,8 @@ export interface MaLineStyle {
   name?: string;
   /** 线宽，0 表示不绘制 */
   width?: number;
+  /** 线型，默认实线；通达信 MVP5 为虚线 */
+  lineType?: "solid" | "dashed" | "dotted";
 }
 
 /** 视觉主题配置：颜色、柱体样式等，均来自配置而非组件内硬编码。 */

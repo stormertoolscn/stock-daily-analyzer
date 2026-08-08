@@ -29,19 +29,38 @@ _bs_logged_in = False
 
 
 def normalize_code(code: str) -> str:
-    return str(code).replace(".SS", "").replace(".SZ", "").replace("sh", "").replace("sz", "").strip()
+    return (
+        str(code)
+        .replace(".SS", "")
+        .replace(".SZ", "")
+        .replace(".BJ", "")
+        .replace("sh", "")
+        .replace("sz", "")
+        .replace("bj", "")
+        .strip()
+    )
+
+
+def _is_beijing(code: str) -> bool:
+    c = normalize_code(code).zfill(6)
+    return c.startswith(("92", "43", "83", "87", "8", "4"))
 
 
 def to_tencent_symbol(code: str) -> str:
     c = normalize_code(code)
-    if c.startswith(("5", "6", "9")):
+    if _is_beijing(c):
+        return f"bj{c}"
+    if c.startswith(("5", "6")) or c.startswith("900"):
         return f"sh{c}"
     return f"sz{c}"
 
 
 def to_baostock_code(code: str) -> str:
     c = normalize_code(code)
-    if c.startswith(("5", "6", "9")):
+    if _is_beijing(c):
+        # baostock 对北交所支持有限，仍按 bj 前缀尝试
+        return f"bj.{c}"
+    if c.startswith(("5", "6")) or c.startswith("900"):
         return f"sh.{c}"
     return f"sz.{c}"
 
@@ -146,6 +165,13 @@ def _cache_path(code: str) -> Path:
     return OHLC_CACHE_DIR / f"{normalize_code(code)}.csv"
 
 
+def _last_weekday_on_or_before(d: date) -> date:
+    """把周末回退到上一个周五（近似最近交易日；法定假日仍可能多拉一次）。"""
+    while d.weekday() >= 5:  # Sat=5, Sun=6
+        d -= timedelta(days=1)
+    return d
+
+
 def _read_ohlc_cache(code: str, start_d: date, end_d: date) -> Optional[pd.DataFrame]:
     path = _cache_path(code)
     if not path.exists():
@@ -156,6 +182,11 @@ def _read_ohlc_cache(code: str, start_d: date, end_d: date) -> Optional[pd.DataF
         if df is None or df.empty:
             return None
         last = df.index.max().date()
+        # 交易日必须覆盖到「今天/上周五」；否则会一直吃旧缓存，当日 K 不更新
+        market_end = _last_weekday_on_or_before(end_d)
+        if last < market_end:
+            return None
+        # 极端过期兜底（例如长期未访问）
         if last < end_d - timedelta(days=OHLC_CACHE_MAX_STALE_DAYS):
             return None
         sliced = df.loc[(df.index.date >= start_d) & (df.index.date <= end_d)]

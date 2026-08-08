@@ -4,11 +4,19 @@ import {
   detectBarFeatures,
   resolveLimitRatio,
   buildFeatureOverlay,
-  FEATURE_COLORS,
+  detectAllIslandReversals,
+  islandLabel,
+  ISLAND_BOX_STYLE,
+  BIG_ISLAND_BOX_STYLE,
 } from "./features";
 import { detectPriceGaps } from "./gaps";
-import { formatVolume, macd, sma } from "./indicators";
+import { formatVolume, sma } from "./indicators";
+import { buildMacdVisual, MACD_LONG, MACD_MM, MACD_SHORT } from "./macdVisual";
 import { getAShareTheme } from "./theme";
+import {
+  detectVolumeFeatures,
+  buildVolumeOverlaySeries,
+} from "./volumeFeatures";
 import type {
   BuildOptionParams,
   ChartMode,
@@ -103,6 +111,7 @@ export function createKlineEngine(
         ...line,
         name: line.name ?? `MA${line.period}`,
         width: line.width ?? 1,
+        lineType: line.lineType ?? "solid",
       }))
       .filter((line) => line.period > 0 && (line.width ?? 1) > 0);
   }
@@ -118,7 +127,11 @@ export function createKlineEngine(
       ...line,
       data: sma(volumes, line.period),
     }));
-    const macdSeries = macd(closes);
+    const macdSeries = buildMacdVisual(bars, {
+      short: params?.macdShort ?? MACD_SHORT,
+      long: params?.macdLong ?? MACD_LONG,
+      mm: params?.macdMm ?? MACD_MM,
+    });
     return { closes, maSeries, volMaSeries, macdSeries };
   }
 
@@ -174,6 +187,7 @@ export function createKlineEngine(
     bars: KlineBar[],
     prevClose?: number | null,
     showAuction = true,
+    rangeHighlight?: { start: number; end: number } | null,
   ): EChartsOption {
     const filtered = showAuction
       ? bars
@@ -271,6 +285,41 @@ export function createKlineEngine(
           }
         : undefined;
 
+    /** 将全量 bars 下标映射到当前 view（可能已去掉竞价） */
+    const mapToView = (fullIdx: number): number => {
+      if (view === bars) {
+        return Math.max(0, Math.min(view.length - 1, fullIdx));
+      }
+      const ts = bars[fullIdx]?.timestamp;
+      if (ts == null) return 0;
+      let best = 0;
+      let bestDiff = Infinity;
+      for (let i = 0; i < view.length; i += 1) {
+        const d = Math.abs(view[i].timestamp - ts);
+        if (d < bestDiff) {
+          bestDiff = d;
+          best = i;
+        }
+      }
+      return best;
+    };
+
+    const rangeMarkArea = (() => {
+      if (!rangeHighlight || view.length < 2) return undefined;
+      let a = mapToView(rangeHighlight.start);
+      let b = mapToView(rangeHighlight.end);
+      if (a > b) [a, b] = [b, a];
+      // 全日未缩进时不铺底；一推拉就出左侧浅红选区
+      if (a <= 0 && b >= view.length - 1) return undefined;
+      return {
+        silent: true,
+        itemStyle: {
+          color: "rgba(245, 34, 45, 0.10)",
+        },
+        data: [[{ xAxis: times[a] }, { xAxis: times[b] }]],
+      };
+    })();
+
     return {
       animation: false,
       backgroundColor: theme.backgroundColor,
@@ -285,7 +334,29 @@ export function createKlineEngine(
         },
         lineStyle: { color: "#9aa3af", width: 1, type: "dashed" },
       },
-      tooltip: { show: false },
+      tooltip: {
+        show: true,
+        trigger: "axis",
+        triggerOn: "mousemove|click",
+        formatter: () => "",
+        backgroundColor: "transparent",
+        borderWidth: 0,
+        padding: 0,
+        textStyle: { fontSize: 0, color: "transparent" },
+        extraCssText: "width:0;height:0;overflow:hidden;pointer-events:none;",
+        axisPointer: {
+          type: "line",
+          snap: true,
+          animation: false,
+          lineStyle: {
+            color: "#9aa3af",
+            width: 1,
+            type: "dashed",
+          },
+          label: { show: false },
+          link: [{ xAxisIndex: "all" }],
+        },
+      },
       grid: [
         { left: 12, right: 56, top: 28, height: "62%" },
         { left: 12, right: 56, top: "74%", height: "18%" },
@@ -409,6 +480,34 @@ export function createKlineEngine(
           },
           z: 3,
         },
+        ...(rangeMarkArea
+          ? [
+              {
+                type: "line" as const,
+                name: "区间底色",
+                xAxisIndex: 0,
+                yAxisIndex: 0,
+                data: closes.map(() => null),
+                showSymbol: false,
+                lineStyle: { width: 0, opacity: 0 },
+                markArea: rangeMarkArea,
+                z: 1,
+                silent: true,
+              },
+              {
+                type: "line" as const,
+                name: "区间底色量",
+                xAxisIndex: 1,
+                yAxisIndex: 1,
+                data: volumeData.map(() => null),
+                showSymbol: false,
+                lineStyle: { width: 0, opacity: 0 },
+                markArea: rangeMarkArea,
+                z: 1,
+                silent: true,
+              },
+            ]
+          : []),
         ...(hasAuction && showAuction
           ? [
               {
@@ -489,6 +588,9 @@ export function createKlineEngine(
       .filter((l) => l.period > 0)
       .slice(0, 10)
       .map((l) => l.period);
+    const period = params?.klinePeriod ?? "day";
+    // 周/月及以上：涨停/跌停/破板是日线概念，不套到更高周期；壹泽洗等形态仍保留
+    const includeDailyLimitHints = period === "day" || period === "intraday";
     const featureOverlay = showFeatures
       ? buildFeatureOverlay(
           bars,
@@ -498,6 +600,7 @@ export function createKlineEngine(
             limitRatio: resolveLimitRatio(params?.stockCode, params?.stockName),
           }),
           { upColor: theme.upColor, downColor: theme.downColor },
+          { includeDailyLimitHints },
         )
       : null;
 
@@ -513,12 +616,27 @@ export function createKlineEngine(
       },
     }));
 
-    const macdBarData = macdSeries.macd.map((v) => ({
+    const macdBarData = macdSeries.macd.map((v, i) => ({
       value: v,
       itemStyle: {
-        color: v >= 0 ? theme.upColor : theme.downColor,
+        color: macdSeries.histColors[i] ?? (v >= 0 ? theme.upColor : "#00c2d4"),
       },
     }));
+
+    // 黄柱：MACD 高于峰连线的差额（透明垫高 + 黄柱堆叠）
+    const yellowPad: (number | null)[] = [];
+    const yellowH: (number | null)[] = [];
+    for (let i = 0; i < macdSeries.yellowTop.length; i += 1) {
+      const top = macdSeries.yellowTop[i];
+      const bot = macdSeries.yellowBot[i];
+      if (top == null || bot == null || top <= bot) {
+        yellowPad.push(0);
+        yellowH.push(0);
+      } else {
+        yellowPad.push(bot);
+        yellowH.push(top - bot);
+      }
+    }
 
     const axisLabelStyle = {
       color: theme.mutedTextColor,
@@ -556,61 +674,67 @@ export function createKlineEngine(
       },
     ];
 
-    const candleWidth =
-      bars.length <= 24 ? 14 : bars.length <= 60 ? 9 : bars.length <= 120 ? 7 : 5;
-    const volWidth = Math.max(3, candleWidth - 1);
-    const macdWidth = Math.max(2, Math.floor(candleWidth * 0.55));
+    // 用百分比柱宽：缩放时由 ECharts 自动变宽/变窄，避免 JS 每帧 setOption
+    const candleWidth: string | number = "68%";
+    const volWidth: string | number = "68%";
+    const macdWidth: string | number = "55%";
 
     const lastBar = bars[bars.length - 1];
     const lastClose = lastBar?.close;
     const priceDigits =
       lastClose != null && lastClose >= 10 ? 2 : 3;
 
-    const gapMarkArea = showGaps
-      ? {
-          silent: true,
-          data: detectPriceGaps(bars).map(
-            (gap) =>
-              [
-                {
-                  xAxis: dates[gap.index - 1],
-                  yAxis: gap.low,
-                  itemStyle: {
-                    color:
-                      gap.direction === "up"
-                        ? "rgba(245, 34, 45, 0.16)"
-                        : "rgba(64, 128, 255, 0.16)",
-                    borderColor:
-                      gap.direction === "up"
-                        ? "rgba(245, 34, 45, 0.35)"
-                        : "rgba(64, 128, 255, 0.35)",
-                    borderWidth: 0.5,
-                  },
+    const gapMarkAreaData = showGaps
+      ? detectPriceGaps(bars).map(
+          (gap) =>
+            [
+              {
+                xAxis: dates[gap.index - 1],
+                yAxis: gap.low,
+                itemStyle: {
+                  // 上/下跳空统一透明灰，避免与涨跌色混淆
+                  color: "rgba(120, 120, 120, 0.18)",
+                  borderColor: "rgba(120, 120, 120, 0.35)",
+                  borderWidth: 0.5,
                 },
-                { xAxis: dates[gap.index], yAxis: gap.high },
-              ] as [
-                {
-                  xAxis: string;
-                  yAxis: number;
-                  itemStyle: {
-                    color: string;
-                    borderColor: string;
-                    borderWidth: number;
-                  };
-                },
-                { xAxis: string; yAxis: number },
-              ],
-          ),
-        }
+              },
+              { xAxis: dates[gap.index], yAxis: gap.high },
+            ] as [
+              {
+                xAxis: string;
+                yAxis: number;
+                itemStyle: {
+                  color: string;
+                  borderColor: string;
+                  borderWidth: number;
+                };
+              },
+              { xAxis: string; yAxis: number },
+            ],
+        )
+      : [];
+
+    // 短岛 + 大岛型反转；虚线半透明圆角框 +「大岛型反转：N天」
+    const islands = showFeatures ? detectAllIslandReversals(bars) : [];
+
+    const gapMarkArea = gapMarkAreaData.length
+      ? { silent: true, z: 0, data: gapMarkAreaData }
       : undefined;
 
     const candleSeries = {
       type: "candlestick" as const,
+      id: "kline-candle",
       name: "K线",
       xAxisIndex: 0,
       yAxisIndex: 0,
       data: candleData,
-      barMaxWidth: candleWidth,
+      // 百分比宽度：缩放零成本自适应；barMaxWidth 限制拉得过宽
+      barWidth: candleWidth,
+      barMinWidth: 1,
+      barMaxWidth: 22,
+      large: bars.length > 500,
+      largeThreshold: 500,
+      animation: false,
       itemStyle: {
         color: theme.upColor,
         color0: theme.downColor,
@@ -657,6 +781,84 @@ export function createKlineEngine(
       ...(gapMarkArea ? { markArea: gapMarkArea } : {}),
     };
 
+    const islandBoxSeries =
+      islands.length > 0
+        ? {
+            type: "custom" as const,
+            name: "岛型反转",
+            xAxisIndex: 0,
+            yAxisIndex: 0,
+            silent: true,
+            z: 0,
+            zlevel: 0,
+            // 若不声明 encode，ECharts 会把 start/end 索引也并入 Y 轴，把 K 线压扁
+            encode: { x: [0, 1], y: [2, 3] },
+            renderItem: (
+              params: { dataIndex: number },
+              api: {
+                value: (dim: number) => number;
+                coord: (val: [number, number]) => number[];
+                size: (val: [number, number]) => number[];
+              },
+            ) => {
+              const start = api.value(0);
+              const end = api.value(1);
+              const y0 = api.value(2);
+              const y1 = api.value(3);
+              const variant = api.value(4); // 0=短岛 1=大岛
+              const isle = islands[params.dataIndex];
+              const style =
+                variant === 1 ? BIG_ISLAND_BOX_STYLE : ISLAND_BOX_STYLE;
+              const p0 = api.coord([start, y0]);
+              const p1 = api.coord([end, y1]);
+              const band = Math.max(2, (api.size([1, 0])[0] as number) || 4);
+              const pad = band * 0.35;
+              const x = Math.min(p0[0], p1[0]) - pad;
+              const y = Math.min(p0[1], p1[1]);
+              const width = Math.abs(p1[0] - p0[0]) + pad * 2;
+              const height = Math.max(4, Math.abs(p1[1] - p0[1]));
+              const r = Math.min(style.radius, width * 0.12, height * 0.18);
+              const label = isle ? islandLabel(isle) : "岛型反转";
+              return {
+                type: "group" as const,
+                children: [
+                  {
+                    type: "rect" as const,
+                    shape: { x, y, width, height, r },
+                    style: {
+                      fill: style.fill,
+                      stroke: style.border,
+                      lineWidth: style.borderWidth,
+                      lineDash: [...style.lineDash],
+                    },
+                    z2: 0,
+                  },
+                  {
+                    type: "text" as const,
+                    style: {
+                      x: x + 6,
+                      y: y + 5,
+                      text: label,
+                      fill: style.border,
+                      font: "bold 11px sans-serif",
+                      textAlign: "left",
+                      textVerticalAlign: "top",
+                    },
+                    z2: 1,
+                  },
+                ],
+              };
+            },
+            data: islands.map((isle) => [
+              isle.startIndex,
+              isle.endIndex,
+              isle.yLow,
+              isle.yHigh,
+              isle.variant === "bigIsland" ? 1 : 0,
+            ]),
+          }
+        : null;
+
     const featurePaintSeries =
       featureOverlay && featureOverlay.paintRects.length
         ? {
@@ -666,6 +868,7 @@ export function createKlineEngine(
             yAxisIndex: 0,
             silent: true,
             z: 5,
+            encode: { x: 0, y: [1, 2] },
             renderItem: (
               params: { dataIndex: number },
               api: {
@@ -682,15 +885,20 @@ export function createKlineEngine(
               const p0 = api.coord([xIndex, y0]);
               const p1 = api.coord([xIndex, y1]);
               const size = api.size([1, 0]);
-              const half = Math.max(2.5, (size[0] as number) * 0.38);
+              const half = Math.max(2.5, (size[0] as number) * 0.35);
               const x = p0[0] - half;
               const y = Math.min(p0[1], p1[1]);
               const h = Math.max(2, Math.abs(p1[1] - p0[1]));
+              const hollow =
+                !rect.fill ||
+                rect.fill === "transparent" ||
+                rect.fill === "rgba(0,0,0,0)" ||
+                rect.fill === "none";
               return {
                 type: "rect" as const,
                 shape: { x, y, width: half * 2, height: h },
                 style: {
-                  fill: rect.fill,
+                  fill: hollow ? "none" : rect.fill,
                   stroke: rect.stroke,
                   lineWidth: rect.lineWidth,
                 },
@@ -703,7 +911,14 @@ export function createKlineEngine(
           }
         : null;
 
+    const volumePack = detectVolumeFeatures(bars);
+    const volumeOverlays = buildVolumeOverlaySeries(bars, volumePack, {
+      barWidth: volWidth,
+      dates,
+    });
+
     const series = [
+      ...(islandBoxSeries ? [islandBoxSeries] : []),
       candleSeries,
       ...(featurePaintSeries ? [featurePaintSeries] : []),
       ...maSeries.map((line) => ({
@@ -719,15 +934,24 @@ export function createKlineEngine(
         emphasis: { disabled: true },
         z: 3,
       })),
+      ...volumeOverlays.filter((s) => (s as { name?: string }).name === "量能带下沿" || (s as { name?: string }).name === "量能带"),
       {
         type: "bar" as const,
+        id: "kline-volume",
         name: "VOLUME",
         xAxisIndex: 1,
         yAxisIndex: 1,
         data: volumeData,
-        barMaxWidth: volWidth,
+        barWidth: volWidth,
+        barMinWidth: 1,
+        barMaxWidth: 24,
         z: 1,
+        barGap: "-100%",
       },
+      ...volumeOverlays.filter((s) => {
+        const name = (s as { name?: string }).name;
+        return name !== "量能带下沿" && name !== "量能带";
+      }),
       ...volMaSeries.map((line) => ({
         type: "line" as const,
         name: line.name ?? `MA${line.period}`,
@@ -737,18 +961,68 @@ export function createKlineEngine(
         showSymbol: false,
         connectNulls: false,
         smooth: false,
-        lineStyle: { width: maStrokeWidth(line.width), color: line.color },
+        lineStyle: {
+          width: maStrokeWidth(line.width),
+          color: line.color,
+          type: line.lineType === "dotted" ? ("dotted" as const) : line.lineType === "dashed" ? ("dashed" as const) : ("solid" as const),
+        },
         emphasis: { disabled: true },
         z: 3,
       })),
       {
         type: "bar" as const,
+        id: "kline-macd",
         name: "MACD",
         xAxisIndex: 2,
         yAxisIndex: 2,
         data: macdBarData,
-        barMaxWidth: macdWidth,
-        barGap: "10%",
+        barWidth: macdWidth,
+        barMinWidth: 1,
+        barMaxWidth: 24,
+        barGap: "-100%",
+        z: 2,
+      },
+      {
+        type: "bar" as const,
+        name: "MACD黄垫",
+        xAxisIndex: 2,
+        yAxisIndex: 2,
+        data: yellowPad,
+        stack: "macd-yellow",
+        barWidth: macdWidth,
+        barMinWidth: 1,
+        barMaxWidth: 24,
+        barGap: "-100%",
+        itemStyle: { color: "transparent", borderWidth: 0 },
+        silent: true,
+        z: 3,
+        tooltip: { show: false },
+      },
+      {
+        type: "bar" as const,
+        name: "MACD黄柱",
+        xAxisIndex: 2,
+        yAxisIndex: 2,
+        data: yellowH,
+        stack: "macd-yellow",
+        barWidth: macdWidth,
+        barMinWidth: 1,
+        barMaxWidth: 24,
+        barGap: "-100%",
+        itemStyle: { color: "#f5d76e" },
+        z: 4,
+      },
+      {
+        type: "line",
+        name: "峰连",
+        xAxisIndex: 2,
+        yAxisIndex: 2,
+        data: macdSeries.peakLine,
+        showSymbol: false,
+        connectNulls: false,
+        lineStyle: { width: 1, color: "#f5d76e", type: "dashed", opacity: 0.85 },
+        emphasis: { disabled: true },
+        z: 5,
       },
       {
         type: "line",
@@ -757,8 +1031,9 @@ export function createKlineEngine(
         yAxisIndex: 2,
         data: macdSeries.dif,
         showSymbol: false,
-        lineStyle: { width: 1.1, color: theme.macdDifColor },
+        lineStyle: { width: 2, color: theme.macdDifColor },
         emphasis: { disabled: true },
+        z: 6,
       },
       {
         type: "line",
@@ -767,8 +1042,9 @@ export function createKlineEngine(
         yAxisIndex: 2,
         data: macdSeries.dea,
         showSymbol: false,
-        lineStyle: { width: 1.1, color: theme.macdDeaColor },
+        lineStyle: { width: 1.2, color: theme.macdDeaColor },
         emphasis: { disabled: true },
+        z: 6,
       },
     ];
 
@@ -790,7 +1066,30 @@ export function createKlineEngine(
           type: "dashed",
         },
       },
-      tooltip: { show: false },
+      tooltip: {
+        show: true,
+        trigger: "axis",
+        triggerOn: "mousemove|click",
+        // 隐藏浮层，仅保留十字轴与交点圆点（同花顺竖线效果）
+        formatter: () => "",
+        backgroundColor: "transparent",
+        borderWidth: 0,
+        padding: 0,
+        textStyle: { fontSize: 0, color: "transparent" },
+        extraCssText: "width:0;height:0;overflow:hidden;pointer-events:none;",
+        axisPointer: {
+          type: "line",
+          snap: true,
+          animation: false,
+          lineStyle: {
+            color: "#9aa3af",
+            width: 1,
+            type: "dashed",
+          },
+          label: { show: false },
+          link: [{ xAxisIndex: [0, 1, 2] }],
+        },
+      },
       grid: grids,
       xAxis: [
         {
@@ -967,6 +1266,7 @@ export function createKlineEngine(
         bars,
         params?.prevClose,
         params?.showAuction !== false,
+        params?.rangeHighlight,
       );
     }
     return buildCandleOption(bars, params);

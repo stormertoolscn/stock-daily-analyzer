@@ -82,7 +82,9 @@ MARKET_INDICES = {
 
 def get_yfinance_ticker(code: str) -> str:
     """将A股代码转换为yfinance格式"""
-    code = code.replace(".SS", "").replace(".SZ", "")
+    code = code.replace(".SS", "").replace(".SZ", "").replace(".BJ", "")
+    if code.startswith(("92", "43", "83", "87", "8", "4")):
+        return f"{code}.BJ"
     if code.startswith(("6",)):
         return f"{code}.SS"  # 上海
     elif code.startswith(("0", "3")):

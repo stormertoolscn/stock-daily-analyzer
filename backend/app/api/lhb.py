@@ -1,6 +1,12 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from app.models.schemas import LhbDailyResponse, LhbSeatDetailResponse
+from app.models.schemas import (
+    HotMoneyListResponse,
+    HotMoneyTradesResponse,
+    LhbDailyResponse,
+    LhbSeatDetailResponse,
+)
+from app.services.hotmoney import fetch_hot_money_trades, list_hot_money
 from app.services.lhb import fetch_daily_lhb, fetch_stock_seats
 
 router = APIRouter(prefix="/api/lhb", tags=["lhb"])
@@ -21,6 +27,29 @@ def get_daily_lhb(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"龙虎榜数据获取失败: {exc}") from exc
     return LhbDailyResponse(**payload)
+
+
+@router.get("/hotmoney", response_model=HotMoneyListResponse)
+def get_hot_money_list(
+    q: str | None = Query(None, description="搜索游资名 / 别名 / 席位关键词"),
+) -> HotMoneyListResponse:
+    """一线游资名录（研究用）。"""
+    return HotMoneyListResponse(**list_hot_money(q))
+
+
+@router.get("/hotmoney/{hm_id}/trades", response_model=HotMoneyTradesResponse)
+def get_hot_money_trades(
+    hm_id: str,
+    days: int = Query(7, ge=1, le=30, description="回溯自然日天数"),
+) -> HotMoneyTradesResponse:
+    """按游资席位关键词追踪近期龙虎榜交易。"""
+    try:
+        payload = fetch_hot_money_trades(hm_id, days=days)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"游资交易获取失败: {exc}") from exc
+    return HotMoneyTradesResponse(**payload)
 
 
 @router.get("/{code}/seats", response_model=LhbSeatDetailResponse)

@@ -1,17 +1,20 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
 type ThemeMode = "light" | "dark" | "github" | "chrome" | "auto";
 
 const THEME_STORAGE_KEY = "sda-theme-mode";
+const HEADER_PIN_KEY = "sda-header-pinned";
 
 const navItems = [
   { path: "/", label: "首页" },
   { path: "/lhb", label: "龙虎榜分析" },
+  { path: "/lhb-v3", label: "龙虎榜新版" },
   { path: "/kline", label: "K线复盘" },
+  { path: "/capital-flow", label: "资金复盘" },
+  { path: "/research", label: "重点研究" },
 ];
-
 const themeOptions: { value: ThemeMode; label: string }[] = [
   { value: "light", label: "浅色" },
   { value: "dark", label: "深色" },
@@ -22,6 +25,54 @@ const themeOptions: { value: ThemeMode; label: string }[] = [
 
 const route = useRoute();
 const themeMode = ref<ThemeMode>("auto");
+const isLhbV3 = computed(() => route.path === "/lhb-v3");
+const isResearch = computed(() => route.path === "/research");
+const isCapitalFlow = computed(() => route.path === "/capital-flow");
+const flushMain = computed(
+  () => isLhbV3.value || isResearch.value || isCapitalFlow.value,
+);
+
+/** 仅标题/主题行消隐；导航药丸常显 */
+const headerPinned = ref(localStorage.getItem(HEADER_PIN_KEY) === "1");
+const headerRevealed = ref(false);
+let hideTimer: ReturnType<typeof setTimeout> | null = null;
+
+const brandVisible = computed(
+  () => headerPinned.value || headerRevealed.value,
+);
+
+function clearHideTimer() {
+  if (hideTimer != null) {
+    clearTimeout(hideTimer);
+    hideTimer = null;
+  }
+}
+
+function revealHeader() {
+  clearHideTimer();
+  headerRevealed.value = true;
+}
+
+function scheduleHideHeader() {
+  if (headerPinned.value) return;
+  clearHideTimer();
+  hideTimer = setTimeout(() => {
+    headerRevealed.value = false;
+    hideTimer = null;
+  }, 280);
+}
+
+function toggleHeaderPin() {
+  headerPinned.value = !headerPinned.value;
+  if (headerPinned.value) {
+    headerRevealed.value = true;
+    clearHideTimer();
+  }
+}
+
+watch(headerPinned, (v) => {
+  localStorage.setItem(HEADER_PIN_KEY, v ? "1" : "0");
+});
 
 const systemPrefersDark = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -56,51 +107,221 @@ onMounted(() => {
   themeMode.value = saved ?? "auto";
   applyTheme(themeMode.value);
   systemPrefersDark.addEventListener("change", handleSystemChange);
+  if (!headerPinned.value) headerRevealed.value = false;
 });
 
 onBeforeUnmount(() => {
   systemPrefersDark.removeEventListener("change", handleSystemChange);
+  clearHideTimer();
 });
 </script>
 
 <template>
-  <div class="flex h-screen flex-col overflow-hidden bg-bg">
-    <header class="shrink-0 bg-bg-elevated px-6 pt-5">
-      <div class="flex items-start justify-between gap-4 pb-4">
+  <div class="app-shell flex h-screen flex-col overflow-hidden bg-bg">
+    <div
+      class="header-hit"
+      aria-hidden="true"
+      @mouseenter="revealHeader"
+    />
+
+    <!-- 标题 + 主题：可消隐 / 钉住 -->
+    <div
+      class="brand-bar shrink-0 bg-bg-elevated px-6 pt-5"
+      :class="{
+        'brand-bar-hidden': !brandVisible,
+        'brand-bar-pinned': headerPinned,
+      }"
+      @mouseenter="revealHeader"
+      @mouseleave="scheduleHideHeader"
+    >
+      <div class="flex items-start justify-between gap-4 pb-3">
         <div>
           <h1 class="text-xl font-semibold text-text">股票日报助手</h1>
           <p class="mt-1 text-sm text-text-muted">A股每日量化 + LLM 选股分析</p>
         </div>
 
-        <div class="pill-group">
+        <div class="header-right">
+          <div class="pill-group">
+            <button
+              v-for="opt in themeOptions"
+              :key="opt.value"
+              type="button"
+              class="pill"
+              :class="{ 'pill-active': themeMode === opt.value }"
+              @click="selectTheme(opt.value)"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
           <button
-            v-for="opt in themeOptions"
-            :key="opt.value"
             type="button"
-            class="pill"
-            :class="{ 'pill-active': themeMode === opt.value }"
-            @click="selectTheme(opt.value)"
+            class="header-pin"
+            :class="{ 'header-pin-on': headerPinned }"
+            :title="headerPinned ? '取消固定顶栏' : '固定顶栏'"
+            :aria-pressed="headerPinned"
+            @click="toggleHeaderPin"
           >
-            {{ opt.label }}
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M16 3a1 1 0 0 1 .8 1.6L14.4 9H17a1 1 0 0 1 .7 1.7L12.4 16v4.3a.7.7 0 0 1-1.4 0V16L6.3 10.7A1 1 0 0 1 7 9h2.6L7.2 4.6A1 1 0 0 1 8 3h8z"
+              />
+            </svg>
           </button>
         </div>
       </div>
+    </div>
 
-      <nav class="tab-bar">
-        <router-link
-          v-for="item in navItems"
-          :key="item.path"
-          :to="item.path"
-          class="tab-item"
-          :class="{ 'tab-item-active': route.path === item.path }"
-        >
-          {{ item.label }}
-        </router-link>
-      </nav>
-    </header>
+    <!-- 导航：始终可见，等宽主题色细边框药丸 -->
+    <nav class="nav-pills shrink-0 bg-bg-elevated px-6 py-2.5" aria-label="主导航">
+      <router-link
+        v-for="item in navItems"
+        :key="item.path"
+        :to="item.path"
+        class="nav-pill"
+        :class="{ 'nav-pill-active': route.path === item.path }"
+      >
+        {{ item.label }}
+      </router-link>
+    </nav>
 
-    <main class="flex min-h-0 flex-1 flex-col overflow-auto p-6">
-      <router-view />
+    <main
+      class="flex min-h-0 flex-1 flex-col overflow-auto"
+      :class="flushMain ? 'p-0' : 'p-6'"
+    >
+      <router-view v-slot="{ Component }">
+        <keep-alive :include="['LhbV3']">
+          <component :is="Component" />
+        </keep-alive>
+      </router-view>
     </main>
   </div>
 </template>
+
+<style scoped>
+.app-shell {
+  position: relative;
+}
+
+.header-hit {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 10px;
+  z-index: 60;
+}
+
+.brand-bar {
+  position: relative;
+  z-index: 50;
+  transform: translateY(0);
+  opacity: 1;
+  max-height: 120px;
+  overflow: hidden;
+  transition:
+    transform 0.28s ease,
+    opacity 0.22s ease,
+    max-height 0.28s ease,
+    padding 0.28s ease;
+}
+
+.brand-bar-hidden {
+  transform: translateY(-100%);
+  opacity: 0;
+  max-height: 0;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  pointer-events: none;
+}
+
+.brand-bar-pinned {
+  box-shadow: none;
+}
+
+.header-right {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.header-pin {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-top: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease,
+    transform 0.2s ease;
+}
+
+.header-pin svg {
+  transform: rotate(45deg);
+  transition: transform 0.2s ease;
+}
+
+.header-pin:hover {
+  color: var(--color-text);
+  border-color: var(--color-accent);
+}
+
+.header-pin-on {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--color-bg));
+}
+
+.header-pin-on svg {
+  transform: rotate(0deg);
+}
+
+.nav-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  border-bottom: 1px solid var(--color-border);
+  z-index: 40;
+}
+
+.nav-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.nav-pill:hover {
+  color: var(--color-text);
+}
+
+.nav-pill-active {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  font-weight: 600;
+}
+</style>

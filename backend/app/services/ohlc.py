@@ -82,6 +82,147 @@ def _resample(df: pd.DataFrame, ui_period: str) -> pd.DataFrame:
     return out
 
 
+def _df_last_date(df: pd.DataFrame) -> date | None:
+    if df is None or df.empty:
+        return None
+    ts = df.index.max()
+    try:
+        return ts.date()  # type: ignore[no-any-return]
+    except Exception:
+        return pd.Timestamp(ts).date()
+
+
+def _last_weekday_on_or_before(d: date) -> date:
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def _fetch_ak_daily_hist(
+    code: str,
+    *,
+    start: str,
+    end: str,
+    adjust: str = "qfq",
+) -> pd.DataFrame | None:
+    """akshare 日 K 兜底（本机东财直连/代理都不稳时仍常可用）。"""
+    try:
+        import akshare as ak
+    except Exception:
+        return None
+    c = str(code).zfill(6)
+    beg = start.replace("-", "")[:8]
+    end_s = end.replace("-", "")[:8]
+    adj = adjust if adjust in ("qfq", "hfq") else ""
+    try:
+        raw = ak.stock_zh_a_hist(
+            symbol=c,
+            period="daily",
+            start_date=beg,
+            end_date=end_s,
+            adjust=adj,
+        )
+    except Exception:
+        return None
+    if raw is None or raw.empty:
+        return None
+    colmap = {
+        "日期": "Date",
+        "开盘": "Open",
+        "收盘": "Close",
+        "最高": "High",
+        "最低": "Low",
+        "成交量": "Volume",
+    }
+    if not all(k in raw.columns for k in ("日期", "开盘", "收盘", "最高", "最低")):
+        return None
+    out = raw.rename(columns=colmap)
+    out["Date"] = pd.to_datetime(out["Date"])
+    # ak 成交量单位为手
+    if "Volume" in out.columns:
+        out["Volume"] = pd.to_numeric(out["Volume"], errors="coerce").fillna(0) * 100
+    else:
+        out["Volume"] = 0.0
+    for col in ("Open", "High", "Low", "Close"):
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out.dropna(subset=["Open", "Close"]).set_index("Date").sort_index()
+    return out[["Open", "High", "Low", "Close", "Volume"]] if not out.empty else None
+
+
+def _merge_recent_daily(
+    code: str,
+    df: pd.DataFrame | None,
+    *,
+    end_d: date,
+    adjust: str,
+    lookback_days: int = 20,
+) -> pd.DataFrame | None:
+    """用近端日 K 补齐/刷新今日柱，避免本地缓存停在昨天。"""
+    market_end = _last_weekday_on_or_before(end_d)
+    last = _df_last_date(df) if df is not None else None
+    # 已覆盖到最近交易日：盘中仍拉一小段刷新当日 OHLC；周末可跳过
+    need_patch = last is None or last < market_end or (
+        last == market_end and end_d.weekday() < 5
+    )
+    if not need_patch:
+        return df
+
+    start = (end_d - timedelta(days=lookback_days)).strftime("%Y%m%d")
+    end = end_d.strftime("%Y%m%d")
+    fresh = _fetch_em_daily_hist(code, start=start, end=end, adjust=adjust)
+    if fresh is None or fresh.empty:
+        fresh = _fetch_ak_daily_hist(code, start=start, end=end, adjust=adjust)
+    if fresh is None or fresh.empty:
+        fresh = _fetch_sina_daily_hist(code, start=start, end=end)
+    if fresh is None or fresh.empty:
+        return df
+
+    if df is None or df.empty:
+        merged = fresh
+    else:
+        merged = pd.concat([df, fresh])
+        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+
+    try:
+        from market_data import _write_ohlc_cache
+
+        _write_ohlc_cache(code, merged)
+    except Exception:
+        pass
+    return merged
+
+
+def _filter_bj_daily(code: str, df: pd.DataFrame | None) -> pd.DataFrame | None:
+    """北交所 92 段为改革后代码，剔除明显串号的长历史。"""
+    if df is None or df.empty:
+        return None
+    c = str(code).zfill(6)
+    out = df.sort_index()
+    if c.startswith("92"):
+        # 92xxxx 不应出现改革前日 K；过早数据基本是串号
+        cutoff = pd.Timestamp("2024-01-01")
+        out = out[out.index >= cutoff]
+    if out.empty:
+        return None
+    return out
+
+
+def _fetch_bj_daily(
+    code: str,
+    *,
+    start: str,
+    end: str,
+    adjust: str = "qfq",
+) -> pd.DataFrame | None:
+    """北交所日 K：东财优先，新浪需过滤串号。"""
+    df = _filter_bj_daily(
+        code, _fetch_em_daily_hist(code, start=start, end=end, adjust=adjust)
+    )
+    if df is not None and not df.empty:
+        return df
+    return _filter_bj_daily(code, _fetch_sina_daily_hist(code, start=start, end=end))
+
+
 def _lookup_name(code: str) -> str | None:
     try:
         from app.services.stock_meta import lookup_name
@@ -91,20 +232,235 @@ def _lookup_name(code: str) -> str | None:
         return None
 
 
-def _secid(code: str) -> str:
-    """东方财富 secid：沪 1.xxxxxx / 深京 0.xxxxxx。"""
+def _is_beijing(code: str) -> bool:
+    """北交所：92xxxx / 8xxxxx / 4xxxxx 等。"""
     c = str(code).zfill(6)
-    if c.startswith(("5", "6", "9")):
+    if c.startswith("92"):
+        return True
+    if c.startswith(("43", "83", "87")):
+        return True
+    if c.startswith("8"):  # 83/87 已覆盖；其余 8xxxxx 多为北交所
+        return True
+    if c.startswith("4"):
+        return True
+    return False
+
+
+def _secid(code: str) -> str:
+    """东方财富 secid：沪 1.xxxxxx / 深+京 0.xxxxxx。
+
+    注意：不能用 startswith('9') 判沪市，否则会把北交所 92xxxx 错映射成 1.92xxxx。
+    """
+    c = str(code).zfill(6)
+    if _is_beijing(c):
+        return f"0.{c}"
+    if c.startswith(("5", "6")):
+        return f"1.{c}"
+    # 沪 B：900xxx
+    if c.startswith("900"):
         return f"1.{c}"
     return f"0.{c}"
 
 
-def _fetch_em_trends(code: str, *, with_auction: bool = True, ndays: int = 1) -> pd.DataFrame | None:
-    """东方财富分时；iscr=1 时尽量带上 09:15 起的集合竞价点。"""
+def _requests_session(trust_env: bool):
     import requests
 
     session = requests.Session()
+    session.trust_env = trust_env
+    return session
+
+
+def _em_trust_modes() -> tuple[bool, ...]:
+    """系统代理 / 直连都试：部分网络只能走其一。"""
+    return (True, False)
+
+
+def _is_proxy_error(exc: BaseException) -> bool:
+    name = type(exc).__name__
+    if "Proxy" in name:
+        return True
+    msg = str(exc).lower()
+    return "proxy" in msg
+
+
+def _fetch_em_daily_hist(
+    code: str,
+    *,
+    start: str,
+    end: str,
+    adjust: str = "qfq",
+) -> pd.DataFrame | None:
+    """东方财富日 K（覆盖北交所 92xxxx 等）。"""
+    import time
+
+    fqt = {"qfq": "1", "hfq": "2", "none": "0"}.get(adjust, "1")
+    beg = start.replace("-", "")[:8]
+    end_s = end.replace("-", "")[:8]
+    params = {
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+        "klt": "101",
+        "fqt": fqt,
+        "secid": _secid(code),
+        "beg": beg,
+        "end": end_s,
+        "lmt": "1000000",
+    }
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer": f"https://quote.eastmoney.com/bj/{str(code).zfill(6)}.html"
+        if _is_beijing(code)
+        else "https://quote.eastmoney.com/",
+        "Accept": "*/*",
+    }
+    primary = ("push2his.eastmoney.com", "push2.eastmoney.com")
+    mirrors = (
+        "82.push2his.eastmoney.com",
+        "83.push2his.eastmoney.com",
+        "84.push2his.eastmoney.com",
+    )
+
+    def _parse(payload: dict) -> pd.DataFrame | None:
+        klines = (payload.get("data") or {}).get("klines") or []
+        if not klines:
+            return None
+        rows: list[dict] = []
+        for line in klines:
+            parts = str(line).split(",")
+            if len(parts) < 6:
+                continue
+            rows.append(
+                {
+                    "Date": pd.Timestamp(parts[0]),
+                    "Open": float(parts[1]),
+                    "Close": float(parts[2]),
+                    "High": float(parts[3]),
+                    "Low": float(parts[4]),
+                    "Volume": float(parts[5]) * 100,
+                }
+            )
+        if not rows:
+            return None
+        return pd.DataFrame(rows).set_index("Date").sort_index()
+
+    # 先主域名 × 代理/直连；代理报错则立刻换直连，避免镜像拖死
+    for trust_env in _em_trust_modes():
+        session = _requests_session(trust_env)
+        for host in primary:
+            try:
+                resp = session.get(
+                    f"https://{host}/api/qt/stock/kline/get",
+                    params=params,
+                    headers=headers,
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                parsed = _parse(resp.json())
+                if parsed is not None:
+                    return parsed
+            except Exception as exc:
+                if trust_env and _is_proxy_error(exc):
+                    break
+                time.sleep(0.1)
+                continue
+
+    for trust_env in _em_trust_modes():
+        session = _requests_session(trust_env)
+        for host in mirrors:
+            try:
+                resp = session.get(
+                    f"https://{host}/api/qt/stock/kline/get",
+                    params=params,
+                    headers=headers,
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                parsed = _parse(resp.json())
+                if parsed is not None:
+                    return parsed
+            except Exception as exc:
+                if trust_env and _is_proxy_error(exc):
+                    break
+                continue
+    return None
+
+
+def _fetch_sina_daily_hist(
+    code: str,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> pd.DataFrame | None:
+    """新浪日 K 兜底（北交所用 bj 前缀）。"""
+    import json
+    import re
+
+    import requests
+
+    c = str(code).zfill(6)
+    if _is_beijing(c):
+        symbol = f"bj{c}"
+    elif c.startswith(("5", "6")) or c.startswith("900"):
+        symbol = f"sh{c}"
+    else:
+        symbol = f"sz{c}"
+
+    session = requests.Session()
     session.trust_env = False
+    url = "https://quotes.sina.cn/cn/api/jsonp_v2.php/x=/CN_MarketDataService.getKLineData"
+    params = {
+        "symbol": symbol,
+        "scale": "240",  # 日线
+        "ma": "no",
+        "datalen": "1023",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://finance.sina.com.cn/",
+    }
+    try:
+        resp = session.get(url, params=params, headers=headers, timeout=20)
+        resp.raise_for_status()
+        text = resp.text
+        m = re.search(r"\[.*\]", text, flags=re.S)
+        if not m:
+            return None
+        items = json.loads(m.group(0))
+        if not items:
+            return None
+        rows: list[dict] = []
+        start_s = (start or "").replace("-", "")[:8]
+        end_s = (end or "").replace("-", "")[:8]
+        for it in items:
+            day = str(it.get("day") or "")
+            day_key = day.replace("-", "")[:8]
+            if start_s and day_key < start_s:
+                continue
+            if end_s and day_key > end_s:
+                continue
+            rows.append(
+                {
+                    "Date": pd.Timestamp(day),
+                    "Open": float(it["open"]),
+                    "High": float(it["high"]),
+                    "Low": float(it["low"]),
+                    "Close": float(it["close"]),
+                    "Volume": float(it["volume"]),
+                }
+            )
+        if not rows:
+            return None
+        return pd.DataFrame(rows).set_index("Date").sort_index()
+    except Exception:
+        return None
+
+
+def _fetch_em_trends(code: str, *, with_auction: bool = True, ndays: int = 1) -> pd.DataFrame | None:
+    """东方财富分时；iscr=1 时尽量带上 09:15 起的集合竞价点。"""
     params = {
         "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13",
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
@@ -115,53 +471,117 @@ def _fetch_em_trends(code: str, *, with_auction: bool = True, ndays: int = 1) ->
         "secid": _secid(code),
     }
     headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://quote.eastmoney.com/",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer": f"https://quote.eastmoney.com/bj/{str(code).zfill(6)}.html"
+        if _is_beijing(code)
+        else "https://quote.eastmoney.com/",
     }
-    last_err: Exception | None = None
-    for host in ("push2.eastmoney.com", "push2his.eastmoney.com"):
-        url = f"https://{host}/api/qt/stock/trends2/get"
+    hosts = (
+        "push2.eastmoney.com",
+        "push2his.eastmoney.com",
+        "push2delay.eastmoney.com",
+    )
+    for trust_env in _em_trust_modes():
+        session = _requests_session(trust_env)
+        for host in hosts:
+            url = f"https://{host}/api/qt/stock/trends2/get"
+            try:
+                resp = session.get(url, params=params, headers=headers, timeout=12)
+                resp.raise_for_status()
+                payload = resp.json()
+                trends = (payload.get("data") or {}).get("trends") or []
+                if not trends:
+                    continue
+                rows: list[dict] = []
+                for line in trends:
+                    parts = str(line).split(",")
+                    if len(parts) < 8:
+                        continue
+                    ts = pd.Timestamp(parts[0])
+                    price = float(parts[2])
+                    high = float(parts[3])
+                    low = float(parts[4])
+                    vol = float(parts[5]) * 100  # 手 → 股
+                    amount = float(parts[6])
+                    avg = float(parts[7]) if parts[7] not in ("", "-", "None") else price
+                    open_ = float(parts[1]) if parts[1] not in ("", "-") else price
+                    rows.append(
+                        {
+                            "day": ts,
+                            "Open": open_,
+                            "High": high,
+                            "Low": low,
+                            "Close": price,
+                            "Volume": vol,
+                            "amount": amount,
+                            "Avg": avg,
+                        }
+                    )
+                if rows:
+                    return pd.DataFrame(rows).set_index("day").sort_index()
+            except Exception as exc:  # noqa: BLE001
+                if trust_env and _is_proxy_error(exc):
+                    break
+                continue
+    return None
+
+
+def _fetch_tencent_minute(code: str) -> pd.DataFrame | None:
+    """腾讯分时（含北交所 bj 前缀）。"""
+    _ensure_analyzer_on_path()
+    from market_data import to_tencent_symbol
+
+    symbol = to_tencent_symbol(code)
+    params = {"code": symbol}
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"}
+    for trust_env in _em_trust_modes():
+        session = _requests_session(trust_env)
         try:
-            resp = session.get(url, params=params, headers=headers, timeout=12)
+            resp = session.get(
+                "https://web.ifzq.gtimg.cn/appstock/app/minute/query",
+                params=params,
+                headers=headers,
+                timeout=12,
+            )
             resp.raise_for_status()
             payload = resp.json()
-            trends = (payload.get("data") or {}).get("trends") or []
-            if not trends:
+            data = (payload.get("data") or {}).get(symbol) or {}
+            raw = ((data.get("data") or {}).get("data")) or []
+            if not raw:
                 continue
+            day_s = str((data.get("data") or {}).get("date") or date.today().isoformat())
+            day_s = day_s.replace("-", "")[:8]
+            y, mo, d = int(day_s[:4]), int(day_s[4:6]), int(day_s[6:8])
             rows: list[dict] = []
-            for line in trends:
-                parts = str(line).split(",")
-                if len(parts) < 8:
+            for line in raw:
+                parts = str(line).split()
+                if len(parts) < 2:
                     continue
-                ts = pd.Timestamp(parts[0])
-                price = float(parts[2])
-                high = float(parts[3])
-                low = float(parts[4])
-                vol = float(parts[5]) * 100  # 手 → 股
-                amount = float(parts[6])
-                avg = float(parts[7]) if parts[7] not in ("", "-", "None") else price
-                open_ = float(parts[1]) if parts[1] not in ("", "-") else price
+                hm = parts[0].zfill(4)
+                hour, minute = int(hm[:2]), int(hm[2:])
+                ts = pd.Timestamp(year=y, month=mo, day=d, hour=hour, minute=minute)
+                px = float(parts[1])
+                vol = float(parts[2]) if len(parts) > 2 else 0.0
                 rows.append(
                     {
                         "day": ts,
-                        "Open": open_,
-                        "High": high,
-                        "Low": low,
-                        "Close": price,
+                        "Open": px,
+                        "High": px,
+                        "Low": px,
+                        "Close": px,
                         "Volume": vol,
-                        "amount": amount,
-                        "Avg": avg,
+                        "Avg": px,
                     }
                 )
-            if not rows:
+            if rows:
+                return pd.DataFrame(rows).set_index("day").sort_index()
+        except Exception as exc:
+            if trust_env and _is_proxy_error(exc):
                 continue
-            df = pd.DataFrame(rows).set_index("day").sort_index()
-            return df
-        except Exception as exc:  # noqa: BLE001
-            last_err = exc
             continue
-    if last_err:
-        return None
     return None
 
 
@@ -233,6 +653,9 @@ def _fetch_intraday(code: str, trade_date: date | None = None) -> dict:
     prev_close: float | None = None
     target = trade_date
 
+    def _filter_day(df: pd.DataFrame, day: date) -> pd.DataFrame:
+        return df[[pd.Timestamp(t).date() == day for t in df.index]]
+
     # 1) 近几日：东方财富（ndays<=5，便于双击近日日K进分时）
     if target is None or (date.today() - target).days <= 5:
         em = _fetch_em_trends(
@@ -242,20 +665,34 @@ def _fetch_intraday(code: str, trade_date: date | None = None) -> dict:
         )
         if em is not None and not em.empty:
             if target is not None:
-                day_em = em[[pd.Timestamp(t).date() == target for t in em.index]]
+                day_em = _filter_day(em, target)
                 if not day_em.empty:
                     session = day_em
                     source = "eastmoney_trends"
             else:
                 last_d = pd.Timestamp(em.index.max()).date()
-                session = em[[pd.Timestamp(t).date() == last_d for t in em.index]]
+                session = _filter_day(em, last_d)
                 source = "eastmoney_trends"
 
-    # 2) 回退腾讯/akshare 分钟
+    # 1b) 腾讯分时仅能拿「最新」——指定历史日时禁止回退，否则会错成今日分时
+    if (session is None or session.empty) and target is None:
+        tx = _fetch_tencent_minute(code)
+        if tx is not None and not tx.empty:
+            session = tx
+            source = "tencent_minute"
+
+    # 2) 回退腾讯/akshare 分钟（支持按日筛选）
     if session is None or session.empty:
-        symbol = to_tencent_symbol(code)
-        raw = ak.stock_zh_a_minute(symbol=symbol, period="1", adjust="")
+        try:
+            symbol = to_tencent_symbol(code)
+            raw = ak.stock_zh_a_minute(symbol=symbol, period="1", adjust="")
+        except Exception:
+            raw = None
         if raw is None or raw.empty:
+            if target is not None:
+                raise LookupError(
+                    f"无法获取 {code} 在 {target.isoformat()} 的分时数据"
+                )
             raise LookupError(f"无法获取 {code} 的分时数据")
         df = raw.copy()
         df["day"] = pd.to_datetime(df["day"])
@@ -295,7 +732,13 @@ def _fetch_intraday(code: str, trade_date: date | None = None) -> dict:
         source = "akshare_minute"
 
     session = session.sort_index()
-    trade_date = pd.Timestamp(session.index[0]).date()
+    resolved_date = pd.Timestamp(session.index[0]).date()
+    # 指定历史日时绝不静默换成别的交易日（尤其是今日）
+    if target is not None and resolved_date != target:
+        raise LookupError(
+            f"{code} 分时日期不匹配：请求 {target.isoformat()}，实得 {resolved_date.isoformat()}"
+        )
+    trade_date = resolved_date
 
     # 昨收兜底
     if prev_close is None or prev_close <= 0:
@@ -419,14 +862,48 @@ def fetch_kline(
     end = end_d.strftime("%Y%m%d")
 
     daily_need = _MIN_DAILY_BARS.get(ui_period, 200)
-    # 提高 min_bars：短缓存根数不够时直接跳过缓存，拉取长历史并回写
-    df = fetch_ohlc(
-        code,
-        start=start,
-        end=end,
-        min_bars=daily_need,
-        use_cache=True,
-    )
+    df: pd.DataFrame | None = None
+
+    # 北交所：禁止 baostock/yfinance/ak；东财优先，新浪需过滤串号长历史
+    if _is_beijing(code):
+        # 北交所上市较短，回看约 2 年即可，避免东财长窗口串数
+        bj_start = (end_d - timedelta(days=800)).strftime("%Y%m%d")
+        df = _fetch_bj_daily(code, start=bj_start, end=end, adjust=adjust)
+        if df is None or df.empty:
+            raise LookupError(f"无法获取北交所 {code} 的行情数据")
+        start_m = (end_d - timedelta(days=20)).strftime("%Y%m%d")
+        fresh = _fetch_bj_daily(code, start=start_m, end=end, adjust=adjust)
+        if fresh is not None and not fresh.empty:
+            df = pd.concat([df, fresh])
+            df = df[~df.index.duplicated(keep="last")].sort_index()
+        df = _resample(df, ui_period)
+        if df.empty:
+            raise LookupError(f"{code} 重采样后无数据")
+        return {
+            "code": code,
+            "name": _lookup_name(code),
+            "period": ui_period,
+            "chart_type": "candle",
+            "adjust": adjust if adjust in ("qfq", "hfq", "none") else "qfq",
+            "adjust_applied": "qfq",
+            "source": "bj_hist",
+            "prev_close": None,
+            "trade_date": None,
+            "count": len(df),
+            "bars": _df_to_bars(df),
+        }
+
+    if df is None or len(df) < daily_need:
+        # 提高 min_bars：短缓存根数不够时直接跳过缓存，拉取长历史并回写
+        md = fetch_ohlc(
+            code,
+            start=start,
+            end=end,
+            min_bars=daily_need,
+            use_cache=True,
+        )
+        if md is not None and (df is None or len(md) > len(df)):
+            df = md
     if df is None or len(df) < daily_need:
         # 个股上市较晚：再降门槛
         fallback = fetch_ohlc(
@@ -457,6 +934,19 @@ def fetch_kline(
                 pass
             df = fresh
 
+    if df is None or df.empty:
+        # 通用兜底：东财日 K（含沪深；并修复北交所）
+        df = _fetch_em_daily_hist(code, start=start, end=end, adjust=adjust)
+    if df is None or df.empty:
+        df = _fetch_ak_daily_hist(code, start=start, end=end, adjust=adjust)
+    if df is None or df.empty:
+        df = _fetch_sina_daily_hist(code, start=start, end=end)
+
+    if df is None or df.empty:
+        raise LookupError(f"无法获取 {code} 的行情数据")
+
+    # 缓存常停在昨天；东财近端合并，保证今日 K（盘中=最新价柱）能更新
+    df = _merge_recent_daily(code, df, end_d=end_d, adjust=adjust)
     if df is None or df.empty:
         raise LookupError(f"无法获取 {code} 的行情数据")
 

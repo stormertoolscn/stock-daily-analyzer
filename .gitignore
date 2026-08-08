@@ -50,3 +50,7 @@ frontend/tsconfig.tsbuildinfo
 
 # Local AI / editor tooling
 .claude/
+
+# Local dev boot logs
+backend/*.log
+backend/_uvicorn_boot.log.err

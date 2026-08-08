@@ -80,3 +80,86 @@ export async function searchStocks(
   const data = (await res.json()) as StockSearchResponse;
   return data.items;
 }
+
+export interface StockBasicInfo {
+  code: string;
+  name: string;
+  price: number;
+  change_pct: number;
+  open: number;
+  high: number;
+  low: number;
+  prev_close: number;
+  volume: number;
+  turnover: number;
+  source: string;
+}
+
+export interface StockResearchReport {
+  code: string;
+  name: string;
+  price: number;
+  change_pct: number;
+  score: number;
+  sentiment: string;
+  operation_advice: string;
+  trend_prediction: string;
+  analysis_summary: string;
+  strategy: {
+    ideal_buy: string;
+    secondary_buy: string;
+    stop_loss: string;
+    take_profit: string;
+  };
+  risks: string[];
+  catalysts: string[];
+  checklist: string[];
+  data_view: { label: string; value: string }[];
+  boards: string[];
+  markdown: string;
+  created_at: string;
+  source: string;
+  phase_label: string;
+  model_used: string;
+}
+
+export async function fetchStockBasic(
+  code: string,
+  signal?: AbortSignal,
+): Promise<StockBasicInfo> {
+  const res = await fetch(`/api/stock/${encodeURIComponent(code)}/basic`, { signal });
+  if (!res.ok) throw new ApiError(res.status, await readError(res));
+  return (await res.json()) as StockBasicInfo;
+}
+
+export interface StockQuoteItem {
+  code: string;
+  name: string;
+  price: number | null;
+  change_pct: number | null;
+  source: string;
+}
+
+export async function fetchStockQuotes(
+  codes: string[],
+  signal?: AbortSignal,
+): Promise<StockQuoteItem[]> {
+  const uniq = [...new Set(codes.map((c) => c.trim()).filter(Boolean))];
+  if (!uniq.length) return [];
+  const params = new URLSearchParams({ codes: uniq.join(",") });
+  const res = await fetch(`/api/stock/quotes?${params}`, { signal });
+  if (!res.ok) throw new ApiError(res.status, await readError(res));
+  const data = (await res.json()) as { items: StockQuoteItem[] };
+  return data.items;
+}
+
+export async function fetchStockResearch(
+  code: string,
+  signal?: AbortSignal,
+): Promise<StockResearchReport> {
+  const res = await fetch(`/api/stock/${encodeURIComponent(code)}/research`, {
+    signal,
+  });
+  if (!res.ok) throw new ApiError(res.status, await readError(res));
+  return (await res.json()) as StockResearchReport;
+}

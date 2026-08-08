@@ -1,0 +1,36 @@
+{======== 大岛型反转 · 虚线长方形近似（替换原 §7 画线段）========}
+{说明：通达信无法画「半透明圆角虚线框」。本段用四条 DOTLINE + 淡色 DRAWBAND}
+{逼近矩形；天数仍用 QF*T。Web 端已实现真正的虚线半透明框。}
+{与「岛型反转」区别：大岛不要求两缺口价格重合，只要求}
+{  向下缺口启动 → 孤岛未回补(HHV<缺口前L) → 向上跳空脱离，天数可很长(≤1500)。}
+
+DXD1:=2;
+
+TKA:=BARSLAST(H<REF(L,1));
+THTJ:=HHV(H,TKA+1);
+THTJ1:=THTJ<REF(L,TKA+1);
+{增加 L>REF(H,1) 强调向上跳空脱离，与 Web 端一致}
+DXFZ0:=REF(THTJ1,1) AND L>REF(HHV(H,TKA+1),1) AND BETWEEN(TKA,DXD1,1500) AND L>REF(H,1);
+
+QF1:=BACKSET(DXFZ0=1,TKA+1);
+QF1T:=BARSLAST(CROSS(QF1=1,0.5));
+QF1A:=BACKSET(DXFZ0=1,2);
+QF1AT:=BARSLAST(CROSS(QF1A=1,0.5));
+TKX1:=REFX(THTJ,BARSNEXT(QF1AT=0));
+
+HHFZ0:=MAX(H,REF(H,QF1T));
+LLFZ0:=LLV(L,QF1T);
+
+{顶边 / 底边（水平虚线）}
+DRAWLINE(QF1T=0,HHFZ0,QF1AT=0,HHFZ0,0),COLOR0099FF,DOTLINE;
+DRAWLINE(QF1T=0,LLFZ0,QF1AT=0,LLFZ0,0),COLOR0099FF,DOTLINE;
+{左边 / 右边（竖直虚线）}
+STICKLINE(QF1T=0,LLFZ0,HHFZ0,0,(-1)),COLOR0099FF;
+STICKLINE(DXFZ0,LLFZ0,HHFZ0,0,(-1)),COLOR0099FF;
+{内部淡填（通达信折中；非真正半透明虚线框）}
+DRAWBAND(IF(QF1,HHFZ0,DRAWNULL),RGB(0,80,120),IF(QF1,LLFZ0,DRAWNULL),RGB(0,40,60));
+
+DRAWTEXT(DXFZ0,H*1.01,VARCAT(VARCAT('↙ 大岛型反转：',VAR2STR(QF1T,0)),' 天')),LINETHICK1,COLOR0099FF;
+
+{其余 DXFZ1..12 可按同样「四边+DRAWBAND」模式复制；}
+{Web 端已用循环统一处理全部历史向下缺口，无需手工展开 12 路。}

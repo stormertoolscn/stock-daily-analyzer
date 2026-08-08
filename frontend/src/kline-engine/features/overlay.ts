@@ -1,19 +1,31 @@
 /**
  * 把 BarFeatureTags 转成 ECharts candlestick itemStyle / markPoint / 叠加矩形。
+ *
+ * 涨停/倍量涨停配色对照通达信常见公式色：
+ * - 涨停体 COLOR6910A3，底部黄头
+ * - 倍量涨停：紫体 + 亮黄粗边框 + 黄头（截图中黄框紫柱）
  */
 import type { KlineBar } from "../types";
 import type { BarFeatureTags } from "./detect";
 
+/** 通达信公式色（勿用主题涨跌红绿替代板标记） */
 export const FEATURE_COLORS = {
+  /** COLOR6910A3 涨停紫 */
   limitUp: "#6910A3",
+  /** 跌停深绿 */
   limitDown: "#296406",
-  volLimitUp: "#e6a23c",
-  limitTip: "#f5d76e",
-  breakBox: "#16a34a",
-  yize: "#d946ef",
-  pierce: "#eab308",
-  alignBull: "#d946ef",
-  alignBear: "#16a34a",
+  /** 倍量涨停实体仍用紫 */
+  volLimitUp: "#6910A3",
+  /** 倍量涨停亮黄外框 COLORFFFF00 */
+  volLimitUpBorder: "#FFFF00",
+  /** 黄头 STICKLINE */
+  limitTip: "#FFFF00",
+  /** 破板绿 */
+  breakBox: "#00C000",
+  yize: "#FF00FF",
+  pierce: "#FFFF00",
+  alignBull: "#FF00FF",
+  alignBear: "#00C000",
 } as const;
 
 export interface FeaturePaintRect {
@@ -82,21 +94,51 @@ function pushLabel(
       show: true,
       formatter: text,
       color,
-      fontSize: 10,
+      fontSize: 11,
       fontWeight: "bold",
       position,
-      distance: 6,
+      distance: position === "top" ? 4 : 6,
     },
     symbol: position === "top" ? "triangle" : "none",
-    symbolSize: position === "top" ? 7 : 0,
+    symbolSize: position === "top" ? 8 : 0,
   });
+}
+
+/** 实体底部黄头（通达信涨停/倍量涨停 STICKLINE） */
+function pushYellowTip(
+  paintRects: FeaturePaintRect[],
+  date: string,
+  bar: KlineBar,
+  ratio = 0.22,
+) {
+  const span = bar.close - bar.open;
+  if (Math.abs(span) < 1e-8) return;
+  paintRects.push({
+    date,
+    y0: bar.open,
+    y1: bar.open + span * ratio,
+    fill: FEATURE_COLORS.limitTip,
+    stroke: FEATURE_COLORS.limitTip,
+    lineWidth: 0,
+  });
+}
+
+export interface BuildFeatureOverlayOptions {
+  /**
+   * 是否展示日线级涨跌停/破板类标注与着色。
+   * 周 K、月 K 及以上应设为 false，避免把日线概念套到更高周期。
+   * 默认 true。
+   */
+  includeDailyLimitHints?: boolean;
 }
 
 export function buildFeatureOverlay(
   bars: KlineBar[],
   tags: BarFeatureTags[],
   _theme: { upColor: string; downColor: string },
+  options?: BuildFeatureOverlayOptions,
 ): FeatureOverlayResult {
+  const includeDaily = options?.includeDailyLimitHints !== false;
   const candleData: FeatureOverlayResult["candleData"] = [];
   const markPointData: FeatureOverlayResult["markPointData"] = [];
   const paintRects: FeaturePaintRect[] = [];
@@ -116,28 +158,28 @@ export function buildFeatureOverlay(
     const bodyHi = Math.max(bar.open, bar.close);
     const body = Math.max(bodyHi - bodyLo, (bar.high - bar.low) * 0.05);
 
-    if (t.volLimitUp) {
+    if (includeDaily && t.volLimitUp) {
+      // 倍量涨停：紫体 + 亮黄粗框（对照通达信截图黄框紫柱）
       candleData.push({
         value: ohlc,
         itemStyle: {
           color: FEATURE_COLORS.volLimitUp,
           color0: FEATURE_COLORS.volLimitUp,
-          borderColor: FEATURE_COLORS.volLimitUp,
-          borderColor0: FEATURE_COLORS.volLimitUp,
-          borderWidth: 2,
+          borderColor: FEATURE_COLORS.volLimitUpBorder,
+          borderColor0: FEATURE_COLORS.volLimitUpBorder,
+          borderWidth: 3,
         },
       });
-      // 倍量涨停：实体下部黄条（通达信 STICKLINE 黄头）
-      paintRects.push({
+      pushYellowTip(paintRects, date, bar, 0.26);
+      pushLabel(
+        markPointData,
         date,
-        y0: bar.open,
-        y1: bar.open + (bar.close - bar.open) * 0.28,
-        fill: FEATURE_COLORS.limitTip,
-        stroke: FEATURE_COLORS.limitTip,
-        lineWidth: 0,
-      });
-      pushLabel(markPointData, date, bar.high, "倍量涨停", FEATURE_COLORS.volLimitUp);
-    } else if (t.limitUp) {
+        bar.high,
+        "倍量涨停",
+        FEATURE_COLORS.volLimitUpBorder,
+      );
+    } else if (includeDaily && t.limitUp) {
+      // 涨停：紫色实心 + 底部黄头
       candleData.push({
         value: ohlc,
         itemStyle: {
@@ -145,19 +187,12 @@ export function buildFeatureOverlay(
           color0: FEATURE_COLORS.limitUp,
           borderColor: FEATURE_COLORS.limitUp,
           borderColor0: FEATURE_COLORS.limitUp,
-          borderWidth: 1.5,
+          borderWidth: 1,
         },
       });
-      paintRects.push({
-        date,
-        y0: bar.open,
-        y1: bar.open + (bar.close - bar.open) * 0.25,
-        fill: FEATURE_COLORS.limitTip,
-        stroke: FEATURE_COLORS.limitTip,
-        lineWidth: 0,
-      });
+      pushYellowTip(paintRects, date, bar, 0.22);
       pushLabel(markPointData, date, bar.high, "涨停", FEATURE_COLORS.limitUp);
-    } else if (t.limitDown) {
+    } else if (includeDaily && t.limitDown) {
       candleData.push({
         value: ohlc,
         itemStyle: {
@@ -173,25 +208,35 @@ export function buildFeatureOverlay(
       candleData.push(ohlc);
     }
 
-    if (t.breakUp) {
+    if (includeDaily && t.breakUp) {
+      const tip = Math.max(
+        (bar.high - bar.low) * 0.08,
+        body * 0.14,
+        Math.abs(bar.close - bar.open) * 0.12 || body * 0.1,
+      );
       paintRects.push({
         date,
-        y0: bodyLo + body * 0.55,
+        y0: bodyHi - tip,
         y1: bodyHi,
-        fill: "rgba(22,163,74,0.08)",
+        fill: "rgba(0,0,0,0)",
         stroke: FEATURE_COLORS.breakBox,
-        lineWidth: 1.4,
+        lineWidth: 1.25,
       });
       pushLabel(markPointData, date, bar.high, "破板", FEATURE_COLORS.breakBox);
     }
-    if (t.breakDown) {
+    if (includeDaily && t.breakDown) {
+      const tip = Math.max(
+        (bar.high - bar.low) * 0.08,
+        body * 0.14,
+        Math.abs(bar.close - bar.open) * 0.12 || body * 0.1,
+      );
       paintRects.push({
         date,
         y0: bodyLo,
-        y1: bodyLo + body * 0.45,
-        fill: "rgba(22,163,74,0.08)",
+        y1: bodyLo + tip,
+        fill: "rgba(0,0,0,0)",
         stroke: FEATURE_COLORS.breakBox,
-        lineWidth: 1.4,
+        lineWidth: 1.25,
       });
       pushLabel(markPointData, date, bar.low, "开板", FEATURE_COLORS.breakBox, "bottom");
     }
@@ -200,7 +245,7 @@ export function buildFeatureOverlay(
       pushLabel(markPointData, date, bar.high * 1.008, "壹泽洗", FEATURE_COLORS.yize);
     }
 
-    if (t.pierceOpen) {
+    if (includeDaily && t.pierceOpen) {
       const n = Math.max(6, t.pierceCount);
       pushLabel(
         markPointData,

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * 右侧筹码分布：绘制区与左侧主图 K 线网格同高同底，Y 轴跟主图价格刻度对齐。
+ * 右侧筹码分布：连续火焰山峰形（平滑轮廓，非方块条）。
+ * 绘制区与左侧主图 K 线网格同高同底，Y 轴跟主图价格刻度对齐。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
@@ -31,6 +32,8 @@ const emit = defineEmits<{
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const bodyRef = ref<HTMLDivElement | null>(null);
+/** 分桶密度：越高轮廓越细腻 */
+const binCount = ref(220);
 
 const MIN_W = 120;
 const MAX_W = 320;
@@ -50,8 +53,17 @@ const resolvedIndex = computed(() => {
 
 const distribution = computed<ChipDistribution | null>(() => {
   if (!props.open || resolvedIndex.value < 0) return null;
-  return computeChipDistribution(props.bars, resolvedIndex.value);
+  return computeChipDistribution(props.bars, resolvedIndex.value, {
+    binCount: binCount.value,
+  });
 });
+
+function refreshBinCount() {
+  const h = bodyRef.value?.clientHeight ?? 0;
+  // 连续峰形：约 1.1px / 档，边缘更圆滑
+  const next = Math.max(140, Math.min(320, Math.round((h || 260) / 1.1)));
+  if (next !== binCount.value) binCount.value = next;
+}
 
 const stats = computed(() => {
   const d = distribution.value;
@@ -75,7 +87,6 @@ function resolvePriceSpan(dist: ChipDistribution): { minP: number; maxP: number 
     !Number.isFinite(maxP) ||
     maxP <= minP
   ) {
-    // 回退：用当前加载 K 线高低（与全量展示时主图接近）
     let lo = Infinity;
     let hi = -Infinity;
     for (const b of props.bars) {
@@ -93,11 +104,124 @@ function resolvePriceSpan(dist: ChipDistribution): { minP: number; maxP: number 
   return { minP: minP as number, maxP: maxP as number };
 }
 
+/** 火焰山色阶：按价格相对位置分带 + 密度提亮；尖峰更醒目 */
+function flameColor(
+  t: number,
+  priceRatio: number,
+  profit: boolean,
+): string {
+  const dens = Math.max(0, Math.min(1, t));
+  // 由低到高：白/金 → 红 → 粉 → 洋红 → 橙（参考通达信火焰山分层）
+  const bands: [number, number, number][] = [
+    [245, 245, 248],
+    [255, 210, 140],
+    [245, 80, 60],
+    [255, 120, 160],
+    [224, 64, 251],
+    [255, 140, 40],
+  ];
+  const bandT = Math.max(0, Math.min(0.999, priceRatio));
+  const base = lerpStops(bands, bandT);
+  // 获利侧略偏暖，套牢侧略偏冷
+  if (!profit) {
+    return mixRgb(base, [64, 128, 255], 0.35 + dens * 0.15);
+  }
+  return mixRgb(base, [255, 60, 40], 0.12 + dens * 0.2);
+}
+
+function parseRgb(s: string): [number, number, number] {
+  const m = s.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  if (!m) return [200, 200, 200];
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+function mixRgb(
+  aCss: string,
+  b: [number, number, number],
+  t: number,
+): string {
+  const a = parseRgb(aCss);
+  const u = Math.max(0, Math.min(1, t));
+  return `rgb(${Math.round(a[0] + (b[0] - a[0]) * u)},${Math.round(a[1] + (b[1] - a[1]) * u)},${Math.round(a[2] + (b[2] - a[2]) * u)})`;
+}
+
+function lerpStops(stops: [number, number, number][], t: number): string {
+  const n = stops.length - 1;
+  const p = t * n;
+  const i = Math.min(n - 1, Math.floor(p));
+  const f = p - i;
+  const a = stops[i];
+  const b = stops[i + 1];
+  const r = Math.round(a[0] + (b[0] - a[0]) * f);
+  const g = Math.round(a[1] + (b[1] - a[1]) * f);
+  const bl = Math.round(a[2] + (b[2] - a[2]) * f);
+  return `rgb(${r},${g},${bl})`;
+}
+
+/** 把离散桶平滑成连续轮廓点（价格 y → 宽度 x） */
+function buildRidgePoints(
+  bins: ChipDistribution["bins"],
+  maxVol: number,
+  maxW: number,
+  yOf: (price: number) => number,
+  cssH: number,
+): Array<{ x: number; y: number; t: number; price: number }> {
+  const pts: Array<{ x: number; y: number; t: number; price: number }> = [];
+  for (const bin of bins) {
+    const y = yOf(bin.price);
+    if (y < -4 || y > cssH + 4) continue;
+    const intensity = bin.volume / maxVol;
+    const t = intensity < 0.004 ? 0 : Math.pow(intensity, 1.55);
+    pts.push({ x: Math.max(0, t * maxW), y, t, price: bin.price });
+  }
+  // 轻平滑，去掉锯齿方块感
+  if (pts.length >= 3) {
+    const sm = pts.map((p) => ({ ...p }));
+    for (let i = 1; i < pts.length - 1; i += 1) {
+      sm[i].x = pts[i - 1].x * 0.22 + pts[i].x * 0.56 + pts[i + 1].x * 0.22;
+      sm[i].t = pts[i - 1].t * 0.22 + pts[i].t * 0.56 + pts[i + 1].t * 0.22;
+    }
+    return sm;
+  }
+  return pts;
+}
+
+/** 单调样条：沿 y 方向画出平滑山脊（调用前需已落在首点） */
+function strokeRidge(
+  ctx: CanvasRenderingContext2D,
+  pts: Array<{ x: number; y: number }>,
+) {
+  if (pts.length === 0) return;
+  if (pts.length === 1) {
+    ctx.lineTo(pts[0].x, pts[0].y);
+    return;
+  }
+  ctx.lineTo(pts[0].x, pts[0].y);
+  if (pts.length === 2) {
+    ctx.lineTo(pts[1].x, pts[1].y);
+    return;
+  }
+  for (let i = 0; i < pts.length - 1; i += 1) {
+    const p0 = pts[Math.max(0, i - 1)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(pts.length - 1, i + 2)];
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+  }
+}
+
 function draw() {
   const canvas = canvasRef.value;
   const body = bodyRef.value;
+  if (!canvas || !body || !props.open) return;
+
+  refreshBinCount();
   const dist = distribution.value;
-  if (!canvas || !body || !dist) return;
+  if (!dist) return;
 
   const dpr = window.devicePixelRatio || 1;
   const cssW = body.clientWidth;
@@ -120,55 +244,79 @@ function draw() {
   const { minP, maxP } = resolvePriceSpan(dist);
   const priceSpan = maxP - minP || 1;
   const maxVol = Math.max(...bins.map((b) => b.volume), 1);
-
-  const plotH = cssH;
-  const barMaxW = cssW - 10;
+  const maxW = cssW - 6;
 
   const up =
     getComputedStyle(document.documentElement)
       .getPropertyValue("--color-up")
       .trim() || "#f5222d";
-  const locked = "#4080ff";
   const muted =
     getComputedStyle(document.documentElement)
       .getPropertyValue("--color-text-muted")
       .trim() || "#6b7280";
 
-  // 与主图 Y 轴同向：高价在上；无额外上下 padding，避免与主图底边错位
-  const yOf = (price: number) => ((maxP - price) / priceSpan) * plotH;
-
-  // 柱高必须按「价格步长 → 像素」换算；用 plotH/bins.length 会在主图缩放时重叠成粗条
-  const step =
-    dist.step > 0
-      ? dist.step
-      : bins.length > 1
-        ? Math.abs(bins[1].price - bins[0].price)
-        : priceSpan / Math.max(bins.length, 1);
+  const yOf = (price: number) => ((maxP - price) / priceSpan) * cssH;
+  const ridge = buildRidgePoints(bins, maxVol, maxW, yOf, cssH);
+  if (!ridge.length) return;
 
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, cssW, cssH);
   ctx.clip();
 
-  for (const bin of bins) {
-    const w = (bin.volume / maxVol) * barMaxW;
-    if (w < 0.5) continue;
-    const yTop = yOf(bin.price + step / 2);
-    const yBot = yOf(bin.price - step / 2);
-    const h = Math.max(0.8, yBot - yTop);
-    // 完全落在可视价格轴外则跳过
-    if (yBot < 0 || yTop > cssH) continue;
-    ctx.fillStyle = bin.price <= dist.close ? up : locked;
-    ctx.globalAlpha = 0.85;
-    ctx.fillRect(0, yTop, w, h);
+  // 连续山峰填充：左缘 → 平滑外轮廓 → 回左缘
+  ctx.beginPath();
+  ctx.moveTo(0, ridge[0].y);
+  strokeRidge(ctx, ridge);
+  ctx.lineTo(0, ridge[ridge.length - 1].y);
+  ctx.closePath();
+
+  // 竖向火焰山渐变（高价→低价）
+  const g = ctx.createLinearGradient(0, 0, 0, cssH);
+  const stops = 12;
+  for (let i = 0; i <= stops; i += 1) {
+    const u = i / stops;
+    const price = maxP - u * priceSpan;
+    const profit = price <= dist.close;
+    g.addColorStop(u, flameColor(0.55 + u * 0.2, 1 - u, profit));
   }
+  ctx.fillStyle = g;
+  ctx.globalAlpha = 0.88;
+  ctx.fill();
+
+  // 内层高亮：按密度再叠一层更窄的峰，增强「火焰」层次
+  const inner = ridge.map((p) => ({
+    x: p.x * (0.42 + p.t * 0.45),
+    y: p.y,
+  }));
+  ctx.beginPath();
+  ctx.moveTo(0, inner[0].y);
+  strokeRidge(ctx, inner);
+  ctx.lineTo(0, inner[inner.length - 1].y);
+  ctx.closePath();
+  const g2 = ctx.createLinearGradient(0, 0, Math.max(8, maxW * 0.55), 0);
+  g2.addColorStop(0, "rgba(255,255,255,0.55)");
+  g2.addColorStop(0.35, "rgba(255,200,120,0.35)");
+  g2.addColorStop(1, "rgba(255,80,40,0.05)");
+  ctx.fillStyle = g2;
+  ctx.globalAlpha = 0.75;
+  ctx.fill();
+
+  // 山脊描边
+  ctx.beginPath();
+  ctx.moveTo(ridge[0].x, ridge[0].y);
+  strokeRidge(ctx, ridge);
+  ctx.strokeStyle = "rgba(180, 60, 40, 0.45)";
+  ctx.lineWidth = 1;
+  ctx.globalAlpha = 0.9;
+  ctx.stroke();
   ctx.globalAlpha = 1;
 
   const yClose = yOf(dist.close);
   if (yClose >= 0 && yClose <= cssH) {
     ctx.strokeStyle = up;
     ctx.setLineDash([]);
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 1.2;
     ctx.beginPath();
     ctx.moveTo(0, yClose);
     ctx.lineTo(cssW, yClose);
@@ -178,12 +326,13 @@ function draw() {
   const yAvg = yOf(dist.avgCost);
   if (yAvg >= 0 && yAvg <= cssH) {
     ctx.strokeStyle = "#8b9199";
-    ctx.setLineDash([]);
+    ctx.setLineDash([3, 2]);
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, yAvg);
     ctx.lineTo(cssW, yAvg);
     ctx.stroke();
+    ctx.setLineDash([]);
 
     ctx.fillStyle = muted;
     ctx.font = "10px sans-serif";
@@ -206,9 +355,13 @@ let resizeObs: ResizeObserver | null = null;
 
 onMounted(() => {
   if (bodyRef.value) {
-    resizeObs = new ResizeObserver(() => draw());
+    resizeObs = new ResizeObserver(() => {
+      refreshBinCount();
+      draw();
+    });
     resizeObs.observe(bodyRef.value);
   }
+  refreshBinCount();
   draw();
 });
 
@@ -265,7 +418,7 @@ function onResizeUp() {
     <div v-show="open" class="chip-panel">
       <div class="chip-resize" title="拖拽调整宽度" @mousedown="onResizeDown" />
       <header class="chip-head">
-        <span>筹码分布</span>
+        <span>筹码分布 · 火焰山</span>
         <button type="button" class="chip-hide" @click="toggle">隐藏</button>
       </header>
       <div v-if="stats" class="chip-stats">
@@ -274,12 +427,14 @@ function onResizeUp() {
         <span>成本 <em>{{ stats.avgCost }}</em></span>
         <span>现价 <em class="chip-up">{{ stats.close }}</em></span>
       </div>
-      <!-- 与左侧主图 grid[0] 同顶同高，底边对齐 K 线主图底 -->
       <div ref="bodyRef" class="chip-body" :style="plotStyle">
         <canvas ref="canvasRef" />
       </div>
-      <footer class="chip-foot" :style="{ top: `calc(${KLINE_LAYOUT.main.topPx}px + ${KLINE_LAYOUT.main.heightPct}%)` }">
-        红获利 · 蓝套牢
+      <footer
+        class="chip-foot"
+        :style="{ top: `calc(${KLINE_LAYOUT.main.topPx}px + ${KLINE_LAYOUT.main.heightPct}%)` }"
+      >
+        连续峰形 · 暖红获利 · 冷蓝套牢
       </footer>
     </div>
   </aside>
@@ -429,7 +584,6 @@ function onResizeUp() {
   position: absolute;
   left: 0;
   right: 0;
-  /* top/height 由 KLINE_LAYOUT inline 控制，与主图 grid 对齐 */
   padding: 0 6px 0 4px;
   box-sizing: border-box;
 }

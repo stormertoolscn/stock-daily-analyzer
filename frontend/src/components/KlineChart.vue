@@ -2,7 +2,8 @@
 /**
  * ECharts K线 / 分时组件外壳。
  * 渲染逻辑全部委托 kline-engine；本组件只持有实例、十字线索引，
- * 以及同花顺式方向键缩放：↑ 放大（天数变少）/ ↓ 缩小（天数变多），按住连续缩放。
+ * 以及通达信/同花顺式方向键：
+ * ← / → 移动十字线（到最旧 / 最新）；↑ 收缩 K 线；↓ 放开 K 线。
  */
 import * as echarts from "echarts";
 import { onBeforeUnmount, onMounted, shallowRef, watch } from "vue";
@@ -30,8 +31,16 @@ const props = defineProps<{
   showSlider?: boolean;
   /** 通达信特征叠加 */
   showFeatures?: boolean;
+  /** 日/周/月等周期，用于过滤日线级涨停提示 */
+  klinePeriod?: "intraday" | "day" | "week" | "month";
   stockCode?: string;
   stockName?: string;
+  /** 分时区间高亮（bars 下标） */
+  rangeStart?: number | null;
+  rangeEnd?: number | null;
+  macdShort?: number;
+  macdLong?: number;
+  macdMm?: number;
   config?: Partial<KlineRenderConfig>;
 }>();
 
@@ -48,13 +57,18 @@ const engine = createKlineEngine(props.config);
 /** 记住当前缩放，避免 setOption 全量刷新后跳回默认窗口 */
 let savedZoom: { start: number; end: number } | null = null;
 let lastBarsKey = "";
+/** 键盘/鼠标十字线当前位置（bars 下标） */
+let cursorIndex: number | null = null;
 
-const ZOOM_FACTOR = 0.9; // 每帧相对缩放
-const ZOOM_TICK_MS = 35;
+const ZOOM_FACTOR = 0.9;
+const HOLD_TICK_MS = 35;
 const MIN_VISIBLE_BARS = 15;
 
+type HoldKey = "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight";
 let holdTimer: ReturnType<typeof setInterval> | null = null;
-let holdKey: "ArrowUp" | "ArrowDown" | null = null;
+let holdKey: HoldKey | null = null;
+let extentTimer: ReturnType<typeof setTimeout> | null = null;
+let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 
 function barsKey(): string {
   const bars = props.bars;
@@ -71,6 +85,14 @@ function categoryLabel(ts: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+function scheduleEmitPriceExtent() {
+  if (extentTimer) clearTimeout(extentTimer);
+  extentTimer = setTimeout(() => {
+    extentTimer = null;
+    emitPriceExtent();
+  }, 80);
+}
+
 function unwrapZoomNum(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (Array.isArray(v) && typeof v[0] === "number" && Number.isFinite(v[0])) {
@@ -85,7 +107,6 @@ function readZoom(): { start: number; end: number } {
     dataZoom?: Array<Record<string, unknown>>;
   };
   const zooms = opt.dataZoom ?? [];
-  // getOption 里 type/start/end 常被包成数组；优先读 slider
   const pick =
     zooms.find((z) => {
       const t = z.type;
@@ -108,10 +129,10 @@ function applyZoom(start: number, end: number) {
     start: s,
     end: e,
   });
-  requestAnimationFrame(() => emitPriceExtent());
+  scheduleEmitPriceExtent();
 }
 
-/** direction: in = 放大(天数变少), out = 缩小(天数变多)；锚定右侧最新K线 */
+/** ↑ 收缩（放大）；↓ 放开（缩小）；锚定右侧最新 */
 function zoomStep(direction: "in" | "out") {
   if (!chart || !props.bars.length) return;
   const { start, end } = readZoom();
@@ -127,7 +148,6 @@ function zoomStep(direction: "in" | "out") {
     span = Math.min(100, span / ZOOM_FACTOR);
   }
 
-  // 右侧锚定：尽量保持 end 不变
   let nextEnd = end;
   let nextStart = nextEnd - span;
   if (nextStart < 0) {
@@ -141,7 +161,133 @@ function zoomStep(direction: "in" | "out") {
   applyZoom(nextStart, nextEnd);
 }
 
-function stopZoomHold() {
+function visibleIndexRange(): { lo: number; hi: number } {
+  const n = props.bars.length;
+  if (n <= 0) return { lo: 0, hi: 0 };
+  const { start, end } = readZoom();
+  const lo = Math.max(0, Math.floor((start / 100) * (n - 1)));
+  const hi = Math.min(n - 1, Math.ceil((end / 100) * (n - 1)));
+  return { lo, hi: Math.max(lo, hi) };
+}
+
+/** 保证十字线落在可视区内；贴边时平移窗口 */
+function ensureCursorVisible(idx: number) {
+  const n = props.bars.length;
+  if (n <= 1 || !chart) return;
+  const { start, end } = readZoom();
+  const span = Math.max(0.5, end - start);
+  const pct = (idx / (n - 1)) * 100;
+  const margin = Math.min(4, span * 0.08);
+  if (pct < start + margin) {
+    let ns = Math.max(0, pct - margin);
+    let ne = ns + span;
+    if (ne > 100) {
+      ne = 100;
+      ns = Math.max(0, ne - span);
+    }
+    applyZoom(ns, ne);
+  } else if (pct > end - margin) {
+    let ne = Math.min(100, pct + margin);
+    let ns = ne - span;
+    if (ns < 0) {
+      ns = 0;
+      ne = Math.min(100, span);
+    }
+    applyZoom(ns, ne);
+  }
+}
+
+function showCursorAt(idx: number) {
+  if (!chart || !props.bars.length) return;
+  const n = props.bars.length;
+  const i = Math.max(0, Math.min(n - 1, idx));
+  cursorIndex = i;
+  ensureCursorVisible(i);
+
+  // dataZoom 后坐标系会变，下一帧再取像素，保证竖线贴准
+  requestAnimationFrame(() => placeAxisPointer(i));
+}
+
+function placeAxisPointer(i: number) {
+  if (!chart || !props.bars.length) return;
+  const opt = chart.getOption() as {
+    xAxis?: Array<{ data?: string[] }> | { data?: string[] };
+  };
+  const xAxis0 = Array.isArray(opt.xAxis) ? opt.xAxis[0] : opt.xAxis;
+  const cat = xAxis0?.data?.[i];
+
+  let xPixel: number | null = null;
+  const tryX = (finder: object, value: unknown) => {
+    try {
+      const x = chart!.convertToPixel(finder, value as never);
+      if (typeof x === "number" && Number.isFinite(x)) return x;
+      if (Array.isArray(x) && Number.isFinite(x[0])) return x[0] as number;
+    } catch {
+      /* ignore */
+    }
+    return null;
+  };
+
+  if (cat != null) xPixel = tryX({ xAxisIndex: 0 }, cat);
+  if (xPixel == null) xPixel = tryX({ xAxisIndex: 0 }, i);
+  if (xPixel == null) {
+    xPixel = tryX({ seriesId: "kline-candle" }, [i, props.bars[i].close]);
+  }
+  if (xPixel == null) {
+    xPixel = tryX({ seriesIndex: 0 }, [i, props.bars[i].close]);
+  }
+  if (xPixel == null || !Number.isFinite(xPixel)) return;
+
+  const height = chart.getHeight();
+  const yPixel = Math.max(20, Math.min(height - 20, height * 0.28));
+
+  chart.dispatchAction({
+    type: "updateAxisPointer",
+    currTrigger: "mousemove",
+    x: xPixel,
+    y: yPixel,
+  });
+  chart.dispatchAction({
+    type: "showTip",
+    x: xPixel,
+    y: yPixel,
+  });
+
+  const zr = chart.getZr();
+  const handler = (
+    zr as unknown as {
+      handler?: {
+        dispatch: (type: string, event: Record<string, unknown>) => void;
+      };
+    }
+  ).handler;
+  handler?.dispatch("mousemove", {
+    zrX: xPixel,
+    zrY: yPixel,
+    preventDefault() {},
+    stopImmediatePropagation() {},
+    stopPropagation() {},
+  });
+
+  emit("update:hoverIndex", i);
+  containerRef.value?.focus({ preventScroll: true });
+}
+
+/** ← 更旧；→ 更新 */
+function moveCursor(delta: number) {
+  if (!props.bars.length) return;
+  const n = props.bars.length;
+  let cur = cursorIndex;
+  if (cur == null || cur < 0 || cur >= n) {
+    const { lo, hi } = visibleIndexRange();
+    cur = delta > 0 ? hi : lo;
+  }
+  const next = Math.max(0, Math.min(n - 1, cur + delta));
+  if (next === cursorIndex && (next === 0 || next === n - 1)) return;
+  showCursorAt(next);
+}
+
+function stopHold() {
   if (holdTimer != null) {
     clearInterval(holdTimer);
     holdTimer = null;
@@ -149,11 +295,11 @@ function stopZoomHold() {
   holdKey = null;
 }
 
-function startZoomHold(direction: "in" | "out", key: "ArrowUp" | "ArrowDown") {
-  stopZoomHold();
+function startHold(key: HoldKey, tick: () => void) {
+  stopHold();
   holdKey = key;
-  zoomStep(direction);
-  holdTimer = setInterval(() => zoomStep(direction), ZOOM_TICK_MS);
+  tick();
+  holdTimer = setInterval(tick, HOLD_TICK_MS);
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -169,24 +315,48 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 function onKeyDown(e: KeyboardEvent) {
   if (isTypingTarget(e.target)) return;
-  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-  // 浏览器 key repeat 会连发 keydown；我们用自己的 interval，忽略 repeat
+  // Alt+← 留给布局「返回上一页」
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+
+  const key = e.key;
+  if (
+    key !== "ArrowUp" &&
+    key !== "ArrowDown" &&
+    key !== "ArrowLeft" &&
+    key !== "ArrowRight"
+  ) {
+    return;
+  }
   if (e.repeat) {
     e.preventDefault();
     return;
   }
   e.preventDefault();
-  startZoomHold(e.key === "ArrowUp" ? "in" : "out", e.key);
+
+  if (key === "ArrowUp") {
+    startHold(key, () => zoomStep("in"));
+  } else if (key === "ArrowDown") {
+    startHold(key, () => zoomStep("out"));
+  } else if (key === "ArrowLeft") {
+    startHold(key, () => moveCursor(-1));
+  } else if (key === "ArrowRight") {
+    startHold(key, () => moveCursor(1));
+  }
 }
 
 function onKeyUp(e: KeyboardEvent) {
-  if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-    if (holdKey === e.key || holdKey != null) stopZoomHold();
+  if (
+    e.key === "ArrowUp" ||
+    e.key === "ArrowDown" ||
+    e.key === "ArrowLeft" ||
+    e.key === "ArrowRight"
+  ) {
+    if (holdKey === e.key || holdKey != null) stopHold();
   }
 }
 
 function onWindowBlur() {
-  stopZoomHold();
+  stopHold();
 }
 
 function render() {
@@ -195,9 +365,18 @@ function render() {
   if (key !== lastBarsKey) {
     savedZoom = null;
     lastBarsKey = key;
+    cursorIndex = null;
   }
 
   engine.setTheme(props.config?.theme ?? getAShareTheme());
+  const rs = props.rangeStart;
+  const re = props.rangeEnd;
+  const rangeHighlight =
+    props.mode === "intraday" &&
+    typeof rs === "number" &&
+    typeof re === "number"
+      ? { start: rs, end: re }
+      : null;
   chart.setOption(
     engine.buildOption(props.bars, {
       mode: props.mode ?? "candle",
@@ -206,12 +385,18 @@ function render() {
       showAuction: props.showAuction !== false,
       showSlider: false,
       showFeatures: props.showFeatures !== false,
+      klinePeriod: props.klinePeriod ?? "day",
       stockCode: props.stockCode,
       stockName: props.stockName,
       maLines: props.maLines,
       volMaLines: props.volMaLines,
       zoomStart: savedZoom?.start,
       zoomEnd: savedZoom?.end,
+      containerWidth: containerRef.value?.clientWidth,
+      rangeHighlight,
+      macdShort: props.macdShort,
+      macdLong: props.macdLong,
+      macdMm: props.macdMm,
     }),
     { notMerge: true, lazyUpdate: false },
   );
@@ -222,7 +407,12 @@ function render() {
 }
 
 function handleResize() {
-  chart?.resize();
+  if (resizeTimer) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    resizeTimer = null;
+    chart?.resize();
+    scheduleEmitPriceExtent();
+  }, 80);
 }
 
 function handleAxisPointer(event: unknown) {
@@ -240,7 +430,12 @@ function handleAxisPointer(event: unknown) {
       : props.bars.findIndex(
           (b) => categoryLabel(b.timestamp) === String(info.value),
         );
-  emit("update:hoverIndex", idx >= 0 ? idx : null);
+  if (idx >= 0) {
+    cursorIndex = idx;
+    emit("update:hoverIndex", idx);
+  } else {
+    emit("update:hoverIndex", null);
+  }
 }
 
 function handleDataZoom(raw: unknown) {
@@ -255,7 +450,8 @@ function handleDataZoom(raw: unknown) {
   } else {
     savedZoom = readZoom();
   }
-  emitPriceExtent();
+  // 柱宽已是百分比，缩放不再 setOption；仅低频同步筹码 Y 轴
+  scheduleEmitPriceExtent();
 }
 
 /** 读取主图 yAxis 实际刻度范围，供右侧筹码 Y 轴对齐 */
@@ -300,6 +496,11 @@ function handleDblClick(event: unknown) {
     seriesType?: string;
     dataIndex?: number;
   };
+  // 优先十字线索引：dataZoom filter 后 series dataIndex 可能错位
+  if (cursorIndex != null && cursorIndex >= 0 && cursorIndex < props.bars.length) {
+    emit("dblclick-bar", cursorIndex);
+    return;
+  }
   if (e.componentType !== "series") return;
   if (e.seriesType !== "candlestick" && e.seriesType !== "line") return;
   if (typeof e.dataIndex !== "number" || e.dataIndex < 0) return;
@@ -312,22 +513,22 @@ let resizeObs: ResizeObserver | null = null;
 onMounted(() => {
   if (!containerRef.value) return;
   chart = echarts.init(containerRef.value, undefined, { renderer: "canvas" });
-  chart.getZr().on("globalout", () => emit("update:hoverIndex", null));
+  // 鼠标离开时不清空键盘十字位置，便于继续用方向键移动
+  chart.getZr().on("globalout", () => {
+    if (cursorIndex == null) emit("update:hoverIndex", null);
+  });
   chart.on("updateAxisPointer", handleAxisPointer);
   chart.on("datazoom", handleDataZoom);
-  chart.on("finished", emitPriceExtent);
   chart.on("dblclick", handleDblClick);
-  render();
-  // setOption 后下一帧再读刻度，避免 scale 未就绪
-  requestAnimationFrame(() => emitPriceExtent());
-
-  // 筹码区展开/拖拽会改变容器宽度，必须跟着重算，否则遮挡或留白
-  resizeObs = new ResizeObserver(() => {
-    handleResize();
-    requestAnimationFrame(() => emitPriceExtent());
+  // 点击画布抢焦点，方向键才能生效
+  containerRef.value.addEventListener("mousedown", () => {
+    containerRef.value?.focus({ preventScroll: true });
   });
+  render();
+  scheduleEmitPriceExtent();
+
+  resizeObs = new ResizeObserver(() => handleResize());
   resizeObs.observe(containerRef.value);
-  // 同时观察父级（.ths-chart-main），宽度变化更稳
   const parent = containerRef.value.parentElement;
   if (parent) resizeObs.observe(parent);
 
@@ -338,7 +539,9 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  stopZoomHold();
+  stopHold();
+  if (resizeTimer) clearTimeout(resizeTimer);
+  if (extentTimer) clearTimeout(extentTimer);
   resizeObs?.disconnect();
   resizeObs = null;
   window.removeEventListener("resize", handleResize);
@@ -347,7 +550,6 @@ onBeforeUnmount(() => {
   window.removeEventListener("blur", onWindowBlur);
   chart?.off("updateAxisPointer", handleAxisPointer);
   chart?.off("datazoom", handleDataZoom);
-  chart?.off("finished", emitPriceExtent);
   chart?.off("dblclick", handleDblClick);
   chart?.dispose();
   chart = null;
@@ -363,8 +565,14 @@ watch(
       props.showAuction,
       props.showSlider,
       props.showFeatures,
+      props.klinePeriod,
       props.stockCode,
       props.stockName,
+      props.rangeStart,
+      props.rangeEnd,
+      props.macdShort,
+      props.macdLong,
+      props.macdMm,
       // 避免 deep watch 在拖动/十字线时误触发全量 setOption 把视窗钉死
       JSON.stringify(props.maLines ?? null),
       JSON.stringify(props.volMaLines ?? null),

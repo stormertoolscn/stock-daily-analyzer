@@ -119,6 +119,66 @@ export async function fetchLhbSeats(
   return (await res.json()) as LhbSeatDetailResponse;
 }
 
+export interface HotMoneyTrader {
+  id: string;
+  name: string;
+  seat: string;
+  keywords: string[];
+  aliases: string[];
+  intro: string;
+  featured: boolean;
+  tier?: string | null;
+}
+
+export interface HotMoneyTradeItem {
+  trade_date: string;
+  code: string;
+  name: string;
+  side: "buy" | "sell";
+  seat_name: string;
+  buy_amount: number;
+  sell_amount: number;
+  net_amount: number;
+  reason: string;
+}
+
+export interface HotMoneyTradesResponse {
+  trader: HotMoneyTrader;
+  days: number;
+  count: number;
+  items: HotMoneyTradeItem[];
+  source: string;
+  range_start: string;
+  range_end: string;
+}
+
+export async function fetchHotMoneyList(
+  q?: string | null,
+  signal?: AbortSignal,
+): Promise<HotMoneyTrader[]> {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  const qs = params.toString();
+  const res = await fetch(`/api/lhb/hotmoney${qs ? `?${qs}` : ""}`, { signal });
+  if (!res.ok) throw new ApiError(res.status, await readError(res));
+  const data = (await res.json()) as { items: HotMoneyTrader[] };
+  return data.items;
+}
+
+export async function fetchHotMoneyTrades(
+  id: string,
+  days = 7,
+  signal?: AbortSignal,
+): Promise<HotMoneyTradesResponse> {
+  const params = new URLSearchParams({ days: String(days) });
+  const res = await fetch(
+    `/api/lhb/hotmoney/${encodeURIComponent(id)}/trades?${params}`,
+    { signal },
+  );
+  if (!res.ok) throw new ApiError(res.status, await readError(res));
+  return (await res.json()) as HotMoneyTradesResponse;
+}
+
 /** 金额格式化：亿元 / 万元 */
 export function formatAmount(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
