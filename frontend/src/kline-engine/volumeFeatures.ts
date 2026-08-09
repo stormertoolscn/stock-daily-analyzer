@@ -313,17 +313,8 @@ export function buildVolumeOverlaySeries(
     }
   }
 
-  // 破板日量柱：红主体保留；底部对半 — 左紫右黄（对照用户示意图）
-  // [index, y0, y1, side] side: 0=左紫 1=右黄
+  // 破板日量柱：与主图同步，保持红/绿单色整柱，不再做左紫右黄对半
   const breakFootSegs: number[][] = [];
-  for (let i = 0; i < n; i += 1) {
-    if (!breakUp[i]) continue;
-    const vol = vols[i];
-    if (!(vol > 0)) continue;
-    const foot = vol * 0.25;
-    breakFootSegs.push([i, 0, foot, 0]);
-    breakFootSegs.push([i, 0, foot, 1]);
-  }
 
   const crossMarks = pack.mvp5Cross35
     .map((flag, i) =>
@@ -494,53 +485,7 @@ export function buildVolumeOverlaySeries(
 
   // 破板日量柱底足：左紫右黄对半（与红量柱同宽拼接）
   if (breakFootSegs.length) {
-    series.push({
-      type: "custom",
-      name: "破板量足",
-      xAxisIndex: 1,
-      yAxisIndex: 1,
-      silent: true,
-      z: 5,
-      encode: { x: 0, y: [1, 2] },
-      renderItem: (
-        _params: { dataIndex: number },
-        api: {
-          value: (dim: number) => number;
-          coord: (val: [number, number]) => number[];
-          size: (val: [number, number]) => number[];
-        },
-      ) => {
-        const idx = api.value(0);
-        const y0 = api.value(1);
-        const y1 = api.value(2);
-        const side = api.value(3); // 0=左紫 1=右黄
-        const p0 = api.coord([idx, y0]);
-        const p1 = api.coord([idx, y1]);
-        const band = Math.max(2, (api.size([1, 0])[0] as number) || 4);
-        // 与量柱同宽 68%，各占一半
-        const fullW = Math.max(2, band * 0.68);
-        const halfW = fullW / 2;
-        const x =
-          side === 0 ? p0[0] - fullW / 2 : p0[0];
-        const color =
-          side === 0 ? VOL_FEATURE_COLORS.purpleB : "#FFFF00";
-        return {
-          type: "rect",
-          shape: {
-            x,
-            y: Math.min(p0[1], p1[1]),
-            width: halfW,
-            height: Math.max(1, Math.abs(p1[1] - p0[1])),
-          },
-          style: {
-            fill: color,
-            stroke: color,
-            lineWidth: 0,
-          },
-        };
-      },
-      data: breakFootSegs,
-    });
+    // 破板量足（左紫右黄对半）已移除：量柱保持整柱单色，与主图同步
   }
 
   // MVP5 陡升洋红加粗
