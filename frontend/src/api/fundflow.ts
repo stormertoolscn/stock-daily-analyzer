@@ -26,6 +26,7 @@ export interface FundFlowReview {
   outflow_total: number;
   source: string;
   updated_at: string;
+  market?: { sh: number; sz: number; cyb: number } | null;
 }
 
 async function readError(res: Response): Promise<string> {
@@ -41,10 +42,14 @@ async function readError(res: Response): Promise<string> {
 
 export async function fetchFundFlowReview(
   refresh = false,
+  tradeDate?: string,
   signal?: AbortSignal,
 ): Promise<FundFlowReview> {
-  const qs = refresh ? "?refresh=true" : "";
-  const res = await fetch(`/api/fundflow/review${qs}`, { signal });
+  const params = new URLSearchParams();
+  if (refresh) params.set("refresh", "true");
+  if (tradeDate) params.set("trade_date", tradeDate);
+  const qs = params.toString();
+  const res = await fetch(`/api/fundflow/review${qs ? `?${qs}` : ""}`, { signal });
   if (!res.ok) throw new ApiError(res.status, await readError(res));
   return (await res.json()) as FundFlowReview;
 }

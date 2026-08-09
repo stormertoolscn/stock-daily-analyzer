@@ -9,7 +9,8 @@ router = APIRouter(prefix="/api/fundflow", tags=["fundflow"])
 @router.get("/review", response_model=FundFlowReviewResponse)
 def get_fund_flow_review(
     refresh: bool = Query(False, description="强制刷新缓存"),
+    trade_date: str | None = Query(None, description="交易日 YYYY-MM-DD；空则当日"),
 ) -> FundFlowReviewResponse:
-    """当日资金复盘：净流入/净流出榜 + 板块主题摘要。"""
-    payload = fetch_fund_flow_review(force=refresh)
+    """资金复盘：当日或指定历史交易日；历史日个股榜基于龙虎榜净买额。"""
+    payload = fetch_fund_flow_review(trade_date=trade_date, force=refresh)
     return FundFlowReviewResponse(**payload)

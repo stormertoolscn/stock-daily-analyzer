@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 资金复盘：当日主力净流入 / 净流出榜。
- * 双击个股进入 K 线复盘；行内展示当日分时缩略图。
+ * 双击个股进入 K 线复盘；行内展示日 K 简图 + 分时简图。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
@@ -14,6 +14,7 @@ import {
 } from "@/api/fundflow";
 import { ApiError } from "@/api/stock";
 import IntradaySpark from "@/components/IntradaySpark.vue";
+import KlineSpark from "@/components/KlineSpark.vue";
 
 defineOptions({ name: "CapitalFlow" });
 
@@ -21,6 +22,15 @@ const router = useRouter();
 const loading = ref(false);
 const error = ref<string | null>(null);
 const data = ref<FundFlowReview | null>(null);
+
+function todayISO(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** 选中的复盘日期：默认当日，可切换历史交易日 */
+const tradeDate = ref<string>(todayISO());
 
 /** 净流入资金：默认大→小；净流出资金：默认 |额| 大→小（更负在前） */
 const inflowAsc = ref(false);
@@ -34,7 +44,7 @@ async function load(refresh = false) {
   loading.value = true;
   error.value = null;
   try {
-    data.value = await fetchFundFlowReview(refresh, abort.signal);
+    data.value = await fetchFundFlowReview(refresh, tradeDate.value, abort.signal);
   } catch (err) {
     if ((err as Error).name === "AbortError") return;
     error.value = err instanceof ApiError ? err.message : "加载资金复盘失败";
@@ -111,10 +121,17 @@ onBeforeUnmount(() => {
           <em v-if="data">{{ data.trade_date }}</em>
         </h1>
         <p class="cf-sub">
-          看清当日主力去向：左侧承接、右侧撤离。双击个股进入 K 线复盘。
+          选择日期查看资金动向：当日为全市场主力榜，历史日期个股榜基于龙虎榜净买额。
         </p>
       </div>
       <div class="cf-hero-actions">
+        <input
+          type="date"
+          v-model="tradeDate"
+          class="cf-date"
+          :max="todayISO()"
+          @change="load()"
+        />
         <button type="button" class="cf-btn" :disabled="loading" @click="load(true)">
           {{ loading ? "刷新中…" : "刷新" }}
         </button>
@@ -125,7 +142,7 @@ onBeforeUnmount(() => {
     </header>
 
     <div v-if="error" class="cf-error">{{ error }}</div>
-    <div v-else-if="loading && !data" class="cf-empty">正在拉取当日资金流向…</div>
+    <div v-else-if="loading && !data" class="cf-empty">正在拉取资金流向…</div>
 
     <template v-else-if="data">
       <section class="cf-totals">
@@ -137,6 +154,13 @@ onBeforeUnmount(() => {
           <span>净流出合计</span>
           <strong>{{ formatFlowAmount(data.outflow_total) }}</strong>
         </div>
+      </section>
+
+      <section v-if="data.market" class="cf-market">
+        <span>大盘主力净流入</span>
+        <em>上证 {{ formatFlowAmount(data.market.sh) }}</em>
+        <em>深证 {{ formatFlowAmount(data.market.sz) }}</em>
+        <em>创业板 {{ formatFlowAmount(data.market.cyb) }}</em>
       </section>
 
       <section v-if="data.themes.length" class="cf-themes">
@@ -164,6 +188,7 @@ onBeforeUnmount(() => {
           <div class="cf-cols">
             <span class="col-rank">#</span>
             <span class="col-name">名称</span>
+            <span class="col-spark">K线简图</span>
             <span class="col-spark">分时简图</span>
             <button
               type="button"
@@ -186,6 +211,7 @@ onBeforeUnmount(() => {
                 <strong>{{ row.name }}</strong>
                 <em>{{ row.code }}</em>
               </div>
+              <KlineSpark :code="row.code" />
               <IntradaySpark :code="row.code" tone="up" />
               <div class="nums">
                 <span class="up">{{ formatFlowAmount(row.net_amount) }}</span>
@@ -204,6 +230,7 @@ onBeforeUnmount(() => {
           <div class="cf-cols">
             <span class="col-rank">#</span>
             <span class="col-name">名称</span>
+            <span class="col-spark">K线简图</span>
             <span class="col-spark">分时简图</span>
             <button
               type="button"
@@ -226,6 +253,7 @@ onBeforeUnmount(() => {
                 <strong>{{ row.name }}</strong>
                 <em>{{ row.code }}</em>
               </div>
+              <KlineSpark :code="row.code" />
               <IntradaySpark :code="row.code" tone="down" />
               <div class="nums">
                 <span class="down">{{ formatFlowAmount(row.net_amount) }}</span>
@@ -251,8 +279,8 @@ onBeforeUnmount(() => {
   --cf-ink: #152033;
   --cf-muted: #5b6b82;
   --cf-line: color-mix(in srgb, #152033 12%, transparent);
-  --cf-up: var(--color-up, #f5222d);
-  --cf-down: var(--color-down, #16a34a);
+  --cf-up: var(--color-up, #ff2438);
+  --cf-down: var(--color-down, #107c10);
   --cf-paper: #f3f6fb;
   --cf-card: #ffffff;
   height: 100%;
@@ -452,13 +480,17 @@ onBeforeUnmount(() => {
 
 .cf-cols {
   display: grid;
-  grid-template-columns: 28px minmax(72px, 1fr) 88px auto;
-  gap: 10px;
+  grid-template-columns: 28px minmax(64px, 1fr) 88px 88px auto;
+  gap: 8px;
   align-items: center;
   padding: 0 16px 8px;
   border-bottom: 1px solid var(--cf-line);
   font-size: 12px;
   color: var(--cf-muted);
+}
+
+.col-spark {
+  text-align: center;
 }
 
 .col-amt {
@@ -491,10 +523,10 @@ onBeforeUnmount(() => {
 
 .cf-board li {
   display: grid;
-  grid-template-columns: 28px minmax(72px, 1fr) 88px auto;
-  gap: 10px;
+  grid-template-columns: 28px minmax(64px, 1fr) 88px 88px auto;
+  gap: 8px;
   align-items: center;
-  padding: 10px 16px;
+  padding: 8px 16px;
   cursor: pointer;
   transition: background 0.15s ease;
 }
@@ -562,6 +594,34 @@ onBeforeUnmount(() => {
   line-height: 1.7;
   color: color-mix(in srgb, var(--cf-ink) 88%, transparent);
   font-size: 14px;
+}
+
+.cf-date {
+  background: var(--cf-card);
+  border: 1px solid var(--cf-line);
+  border-radius: 10px;
+  padding: 7px 10px;
+  color: var(--cf-ink);
+  font-size: 13px;
+}
+
+.cf-market {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--cf-card);
+  border: 1px solid var(--cf-line);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: color-mix(in srgb, var(--cf-ink) 85%, transparent);
+}
+
+.cf-market em {
+  font-style: normal;
+  font-weight: 600;
 }
 
 @media (max-width: 960px) {

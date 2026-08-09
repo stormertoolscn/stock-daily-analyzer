@@ -257,3 +257,4 @@ class FundFlowReviewResponse(BaseModel):
     outflow_total: float = 0
     source: str = ""
     updated_at: str = ""
+    market: Optional[dict] = None

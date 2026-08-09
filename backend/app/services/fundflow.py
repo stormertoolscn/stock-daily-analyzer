@@ -1,4 +1,4 @@
-"""当日资金复盘：个股主力净流入/流出榜 + 板块热点摘要。"""
+"""资金复盘：当日主力净流入/流出榜；历史日期基于龙虎榜净买额 + 大盘历史资金流。"""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import time
 from datetime import date, datetime
 from typing import Any
 
-_CACHE: dict[str, Any] | None = None
-_CACHE_TS = 0.0
+# 按交易日缓存（历史日期数据不可变，可长期复用）
+_CACHE_BY_DATE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_TTL = 90.0
 
 
@@ -80,6 +80,7 @@ def _mock_review(trade_date: str) -> dict[str, Any]:
         "outflow_total": sum(x["net_amount"] for x in outflows),
         "source": "mock",
         "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "market": None,
     }
 
 
@@ -189,36 +190,147 @@ def _build_summary(
     return "".join(parts)
 
 
-def fetch_fund_flow_review(*, force: bool = False) -> dict[str, Any]:
-    global _CACHE, _CACHE_TS
-    now = time.time()
-    if not force and _CACHE is not None and now - _CACHE_TS < _CACHE_TTL:
-        return _CACHE
-
+def _load_today_review() -> dict[str, Any]:
+    """当日：akshare 全市场主力净流入排行（真实数据）。"""
     trade_date = date.today().isoformat()
+    inflows, outflows, source = _load_individual_rank(28)
     try:
-        inflows, outflows, source = _load_individual_rank(28)
-        try:
-            themes = _load_themes(10)
-        except Exception:
-            themes = []
-        payload = {
-            "trade_date": trade_date,
-            "session_label": "今日",
-            "summary": _build_summary(trade_date, themes, inflows, outflows),
-            "themes": themes,
-            "inflows": inflows,
-            "outflows": outflows,
-            "inflow_total": sum(x["net_amount"] for x in inflows),
-            "outflow_total": sum(x["net_amount"] for x in outflows),
-            "source": source,
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-        }
-        _CACHE = payload
-        _CACHE_TS = now
-        return payload
+        themes = _load_themes(10)
     except Exception:
-        mock = _mock_review(trade_date)
-        _CACHE = mock
-        _CACHE_TS = now
-        return mock
+        themes = []
+    return {
+        "trade_date": trade_date,
+        "session_label": "今日",
+        "summary": _build_summary(trade_date, themes, inflows, outflows),
+        "themes": themes,
+        "inflows": inflows,
+        "outflows": outflows,
+        "inflow_total": sum(x["net_amount"] for x in inflows),
+        "outflow_total": sum(x["net_amount"] for x in outflows),
+        "source": source,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "market": None,
+    }
+
+
+def _load_market_flow(trade_date: str) -> dict[str, float] | None:
+    """大盘历史资金流：上证 / 深证 / 创业板主力净流入（元）。"""
+    try:
+        import akshare as ak
+
+        df = ak.stock_market_fund_flow()
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+    date_col = _pick_col(df, "日期")
+    if not date_col:
+        return None
+    target = trade_date.replace("-", "")
+
+    def _val(row: Any, *names: str) -> float:
+        for n in names:
+            if n in df.columns:
+                v = _safe_float(row[n])
+                if v:
+                    return v
+        for col in df.columns:
+            s = str(col)
+            if all(k in s for k in ("主力", "净流入", "净额")):
+                v = _safe_float(row[col])
+                if v:
+                    return v
+        return 0.0
+
+    for _, row in df.iterrows():
+        d = str(row[date_col]).replace("-", "")[:8]
+        if d == target:
+            return {
+                "sh": _val(row, "上证-主力净流入-净额", "上证主力净流入"),
+                "sz": _val(row, "深证-主力净流入-净额", "深证主力净流入"),
+                "cyb": _val(row, "创业板-主力净流入-净额", "创业板主力净流入"),
+            }
+    return None
+
+
+def _load_historical_review(trade_date: str) -> dict[str, Any]:
+    """历史日期：全市场主力排行仅支持当日，个股榜基于当日龙虎榜席位净买额。"""
+    from app.services.lhb import fetch_daily_lhb
+
+    lhb = fetch_daily_lhb(trade_date, allow_mock=False)
+    items = lhb.get("items") or []
+    nets = [x["net_buy"] for x in items if isinstance(x.get("net_buy"), (int, float))]
+    # akshare 龙虎榜净买额通常为元；若整体量级像“亿”则换算为元
+    scale = 1e8 if nets and max(abs(v) for v in nets) < 1e8 else 1.0
+    rows: list[dict[str, Any]] = []
+    for it in items:
+        code = str(it.get("code", "")).zfill(6)
+        rows.append(
+            {
+                "code": code,
+                "name": str(it.get("name", "") or code),
+                "net_amount": float(it.get("net_buy") or 0) * scale,
+                "change_pct": float(it.get("change_pct") or 0),
+            }
+        )
+    inflows = sorted([r for r in rows if r["net_amount"] > 0], key=lambda x: x["net_amount"], reverse=True)
+    outflows = sorted([r for r in rows if r["net_amount"] < 0], key=lambda x: x["net_amount"])
+    for i, x in enumerate(inflows[:28], 1):
+        x["rank"] = i
+    for i, x in enumerate(outflows[:28], 1):
+        x["rank"] = i
+
+    market = _load_market_flow(trade_date)
+    source = "lhb" + ("+market" if market else "")
+    parts = [
+        f"{trade_date} 资金动向复盘（历史）：全市场主力净流入排行仅支持当日，个股榜基于当日龙虎榜席位净买额。"
+    ]
+    if market:
+        parts.append(
+            "大盘主力净流入：上证 {0}、深证 {1}、创业板 {2}。".format(
+                _fmt_yi(market["sh"] or 0),
+                _fmt_yi(market["sz"] or 0),
+                _fmt_yi(market["cyb"] or 0),
+            )
+        )
+    if inflows:
+        parts.append("龙虎榜承接靠前：" + "、".join(x["name"] for x in inflows[:6]) + "。")
+    if outflows:
+        parts.append("龙虎榜撤离靠前：" + "、".join(x["name"] for x in outflows[:6]) + "。")
+    parts.append("双击个股可进入 K 线复盘。")
+
+    return {
+        "trade_date": lhb.get("trade_date") or trade_date,
+        "session_label": "全日",
+        "summary": "".join(parts),
+        "themes": [],
+        "inflows": inflows[:28],
+        "outflows": outflows[:28],
+        "inflow_total": sum(x["net_amount"] for x in inflows[:28]),
+        "outflow_total": sum(x["net_amount"] for x in outflows[:28]),
+        "market": market,
+        "source": source,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def fetch_fund_flow_review(*, trade_date: str | None = None, force: bool = False) -> dict[str, Any]:
+    now = time.time()
+    target = (trade_date or "").strip() or date.today().isoformat()
+    cached = _CACHE_BY_DATE.get(target)
+    if not force and cached is not None and now - cached[0] < _CACHE_TTL:
+        return cached[1]
+
+    try:
+        if target == date.today().isoformat():
+            payload = _load_today_review()
+        else:
+            payload = _load_historical_review(target)
+    except Exception:
+        payload = _mock_review(target)
+
+    _CACHE_BY_DATE[target] = (now, payload)
+    if len(_CACHE_BY_DATE) > 20:
+        oldest = min(_CACHE_BY_DATE, key=lambda k: _CACHE_BY_DATE[k][0])
+        _CACHE_BY_DATE.pop(oldest, None)
+    return payload
