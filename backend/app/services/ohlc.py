@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal
@@ -529,6 +530,176 @@ def _fetch_em_trends(code: str, *, with_auction: bool = True, ndays: int = 1) ->
     return None
 
 
+def _fetch_em_minute_hist(
+    code: str,
+    trade_date: date,
+    period: int = 5,
+) -> pd.DataFrame | None:
+    """东方财富历史分钟 K 线（klt=5/15/30/60 可回溯较早日期；1 分钟仅近 5 日）。"""
+    params = {
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "ut": "7eea3edcaed734bea9cbfc24409ed989",
+        "klt": str(int(period)),
+        "fqt": "0",
+        "secid": _secid(code),
+        "beg": trade_date.strftime("%Y%m%d"),
+        "end": trade_date.strftime("%Y%m%d"),
+    }
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer": f"https://quote.eastmoney.com/bj/{str(code).zfill(6)}.html"
+        if _is_beijing(code)
+        else "https://quote.eastmoney.com/",
+    }
+    hosts = (
+        "push2his.eastmoney.com",
+        "push2.eastmoney.com",
+        "push2delay.eastmoney.com",
+    )
+    for trust_env in _em_trust_modes():
+        session = _requests_session(trust_env)
+        for host in hosts:
+            try:
+                resp = session.get(
+                    f"https://{host}/api/qt/stock/kline/get",
+                    params=params,
+                    headers=headers,
+                    timeout=12,
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                klines = (payload.get("data") or {}).get("klines") or []
+                if not klines:
+                    continue
+                rows: list[dict] = []
+                for line in klines:
+                    parts = str(line).split(",")
+                    if len(parts) < 7:
+                        continue
+                    # 日期, 开盘, 收盘, 最高, 最低, 成交量(手), 成交额(元), ...
+                    ts = pd.Timestamp(parts[0])
+                    rows.append(
+                        {
+                            "day": ts,
+                            "Open": float(parts[1]),
+                            "High": float(parts[3]),
+                            "Low": float(parts[4]),
+                            "Close": float(parts[2]),
+                            "Volume": float(parts[5]) * 100,  # 手 → 股
+                            "amount": float(parts[6]),
+                            "Avg": float(parts[2]),
+                        }
+                    )
+                if rows:
+                    return pd.DataFrame(rows).set_index("day").sort_index()
+            except Exception as exc:  # noqa: BLE001
+                if trust_env and _is_proxy_error(exc):
+                    break
+                continue
+    return None
+
+
+_BAOSTOCK_LOCK = threading.Lock()
+# 历史 5 分钟内存缓存（数据不可变，会话内复用；baostock 服务不稳定时也能秒回）
+_BS_MIN_CACHE: dict[str, pd.DataFrame] = {}
+_BS_MIN_CACHE_KEYS: list[str] = []
+
+
+def _fetch_baostock_minute(
+    code: str,
+    trade_date: date,
+    period: int = 5,
+) -> pd.DataFrame | None:
+    """baostock 历史分钟 K 线（5/15/30/60 分钟可回溯较早日期；不支持北交所）。
+
+    服务不稳定时可能挂起：放入带超时的线程执行，超时（10s）即放弃并返回 None。
+    """
+    c = str(code).zfill(6)
+    if _is_beijing(c) or c.startswith("9"):
+        return None
+    key = f"bs{int(period)}:{c}:{trade_date.isoformat()}"
+    cached = _BS_MIN_CACHE.get(key)
+    if cached is not None:
+        return cached
+    prefix = "sh" if c.startswith("6") else "sz"
+
+    def _run() -> pd.DataFrame | None:
+        try:
+            import baostock as bs
+        except Exception:
+            return None
+        with _BAOSTOCK_LOCK:
+            try:
+                lg = bs.login()
+                if lg.error_code != "0":
+                    return None
+                try:
+                    rs = bs.query_history_k_data_plus(
+                        f"{prefix}.{c}",
+                        "date,time,open,high,low,close,volume,amount",
+                        start_date=trade_date.strftime("%Y-%m-%d"),
+                        end_date=trade_date.strftime("%Y-%m-%d"),
+                        frequency=str(int(period)),
+                        adjustflag="3",
+                    )
+                    if rs.error_code != "0":
+                        return None
+                    rows: list[dict] = []
+                    while rs.next():
+                        row = rs.get_row_data()
+                        if len(row) < 8:
+                            continue
+                        try:
+                            ts = pd.Timestamp(str(row[1])[:14])  # YYYYMMDDHHmmss
+                        except Exception:
+                            continue
+                        rows.append(
+                            {
+                                "day": ts,
+                                "Open": float(row[2]),
+                                "High": float(row[3]),
+                                "Low": float(row[4]),
+                                "Close": float(row[5]),
+                                "Volume": float(row[6]),
+                                "amount": float(row[7]),
+                                "Avg": float(row[5]),
+                            }
+                        )
+                    if rows:
+                        return pd.DataFrame(rows).set_index("day").sort_index()
+                finally:
+                    try:
+                        bs.logout()
+                    except Exception:
+                        pass
+            except Exception:
+                return None
+        return None
+
+    df: pd.DataFrame | None = None
+    try:
+        import concurrent.futures as cf
+
+        ex = cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="bs-min")
+        fut = ex.submit(_run)
+        try:
+            df = fut.result(timeout=10)
+        finally:
+            ex.shutdown(wait=False)
+    except Exception:
+        df = None
+    if df is not None and not df.empty:
+        _BS_MIN_CACHE[key] = df
+        _BS_MIN_CACHE_KEYS.append(key)
+        if len(_BS_MIN_CACHE_KEYS) > 200:
+            _BS_MIN_CACHE.pop(_BS_MIN_CACHE_KEYS.pop(0), None)
+    return df
+
+
 def _fetch_tencent_minute(code: str) -> pd.DataFrame | None:
     """腾讯分时（含北交所 bj 前缀）。"""
     _ensure_analyzer_on_path()
@@ -682,6 +853,18 @@ def _fetch_intraday(code: str, trade_date: date | None = None) -> dict:
             source = "tencent_minute"
 
     # 2) 回退腾讯/akshare 分钟（支持按日筛选）
+    # 1 分钟源只保留近几日：超过保留期（约5日）的历史日期用 5 分钟历史线兜底（baostock → 东财）
+    if (
+        target is not None
+        and (session is None or session.empty)
+        and (date.today() - target).days > 5
+    ):
+        m5 = _fetch_baostock_minute(code, target)
+        if m5 is None or m5.empty:
+            m5 = _fetch_em_minute_hist(code, target)
+        if m5 is not None and not m5.empty:
+            session = m5
+            source = "5分钟历史"
     if session is None or session.empty:
         try:
             symbol = to_tencent_symbol(code)
