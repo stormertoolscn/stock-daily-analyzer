@@ -87,7 +87,7 @@ if (Test-PortListening $BackendPort) {
   # 后台隐藏启动（无窗口）：日志写入 backend/_uvicorn_boot.log
   $backendCmd = @"
 Set-Location -LiteralPath '$BackendDir'
-& '$VenvPython' -m uvicorn app.main:app --reload --host $BackendHost --port $BackendPort *> '$BackendDir\_uvicorn_boot.log'
+& '$VenvPython' -m uvicorn app.main:app --host $BackendHost --port $BackendPort *> '$BackendDir\_uvicorn_boot.log'
 exit `$LASTEXITCODE
 "@
   Start-Process -FilePath "powershell.exe" -WorkingDirectory $BackendDir -WindowStyle Hidden -ArgumentList @(

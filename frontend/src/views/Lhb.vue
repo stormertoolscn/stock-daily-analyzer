@@ -135,7 +135,7 @@ loadDaily();
         <div>
           <h2 class="card-title mb-1">龙虎榜分析</h2>
           <p class="text-sm text-text-muted">
-            日榜筛选 + 买卖席位关系图谱（Cytoscape）。红线买入，绿线卖出。
+            日榜筛选 + 席位关系气泡图（嵌套打包布局）：中心股票，机构 / 游资 / 通道分组，气泡大小=金额，红买绿卖。
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -151,8 +151,8 @@ loadDaily();
           </button>
           <router-link
             class="btn"
-            :to="{ path: '/lhb-v3', query: { tab: 'hotmoney', hm: 'hlha' } }"
-            title="追踪欢乐海岸 / 章盟主等一线游资交易"
+            :to="{ path: '/lhb-v3', query: { tab: 'hotmoney', hm: 'zmz' } }"
+            title="追踪章盟主 / 欢乐海岸等一线游资交易"
           >
             游资追踪
           </router-link>
