@@ -245,3 +245,117 @@ html[data-theme="abi"] .nav-pills,
 html[data-theme="abi"] .app-shell {
   background: transparent;
 }
+/* ---------- ABI Research：主图 hero 深蓝 banner + 橙色 CTA ---------- */
+html[data-theme="abi"] .home-hero,
+html[data-theme="abi"] .qnt-hero,
+html[data-theme="abi"] .bt-hero,
+html[data-theme="abi"] .cf-hero {
+  background: linear-gradient(135deg, #002d5d 0%, #01387a 55%, #024f4a 130%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  box-shadow: 0 14px 34px rgba(0, 45, 93, 0.22);
+}
+
+html[data-theme="abi"] .home-hero h1,
+html[data-theme="abi"] .qnt-hero h1,
+html[data-theme="abi"] .bt-hero h1,
+html[data-theme="abi"] .cf-hero h1 {
+  color: #ffffff;
+}
+
+html[data-theme="abi"] .home-kicker,
+html[data-theme="abi"] .qnt-kicker,
+html[data-theme="abi"] .bt-kicker,
+html[data-theme="abi"] .cf-kicker {
+  color: #ffc844;
+}
+
+html[data-theme="abi"] .home-sub,
+html[data-theme="abi"] .qnt-sub,
+html[data-theme="abi"] .bt-sub,
+html[data-theme="abi"] .cf-sub,
+html[data-theme="abi"] .qnt-ref {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+html[data-theme="abi"] .qnt-hero,
+html[data-theme="abi"] .bt-hero,
+html[data-theme="abi"] .cf-hero {
+  border-bottom: none;
+}
+
+html[data-theme="abi"] .qnt-hero a,
+html[data-theme="abi"] .bt-sub a,
+html[data-theme="abi"] .cf-hero a {
+  color: #ffb199;
+}
+
+html[data-theme="abi"] .home-btn-accent {
+  background: #ff5400;
+}
+
+html[data-theme="abi"] .home-btn-ghost {
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #ffffff;
+}
+
+html[data-theme="abi"] .home-btn-ghost:hover {
+  border-color: #ff5400;
+  color: #ff5400;
+}
+
+/* 首页橙色 CTA banner */
+html[data-theme="abi"] .home-banner {
+  background: linear-gradient(90deg, #ff5400 0%, #ef6b51 100%);
+  border: none;
+  color: #ffffff;
+}
+
+html[data-theme="abi"] .home-banner span {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+html[data-theme="abi"] .home-banner-link {
+  color: #ffffff;
+}
+
+/* hero 内按钮 / 日期选择器适配深蓝底 */
+html[data-theme="abi"] .cf-hero .cf-date,
+html[data-theme="abi"] .cf-hero .cf-btn {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.32);
+  color: #ffffff;
+}
+
+html[data-theme="abi"] .cf-hero .cf-meta {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+html[data-theme="abi"] .qnt-hero .qnt-chip {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+html[data-theme="abi"] .qnt-hero .qnt-chip:hover,
+html[data-theme="abi"] .qnt-hero .qnt-chip-active {
+  border-color: #ff5400;
+  color: #ff5400;
+}
+
+html[data-theme="abi"] .qnt-hero .qnt-quick-label,
+html[data-theme="abi"] .bt-hero-meta span {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+html[data-theme="abi"] .bt-hero-meta span {
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* 玻璃主题家族不回退：abi 固定浅色正文区 */
+html[data-theme="abi"] .qnt-toc,
+html[data-theme="abi"] .brand-bar,
+html[data-theme="abi"] .nav-pills {
+  background: transparent;
+}
