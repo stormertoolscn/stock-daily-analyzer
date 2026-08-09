@@ -2,7 +2,17 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
-type ThemeMode = "light" | "dark" | "github" | "chrome" | "auto";
+type ThemeMode =
+  | "light"
+  | "dark"
+  | "apple"
+  | "apple-dark"
+  | "gemini-light"
+  | "gemini"
+  | "goose"
+  | "github"
+  | "chrome"
+  | "auto";
 
 const THEME_STORAGE_KEY = "sda-theme-mode";
 const HEADER_PIN_KEY = "sda-header-pinned";
@@ -13,11 +23,17 @@ const navItems = [
   { path: "/lhb-v3", label: "龙虎榜新版" },
   { path: "/kline", label: "K线复盘" },
   { path: "/capital-flow", label: "资金复盘" },
+  { path: "/quant", label: "数据量化" },
   { path: "/research", label: "重点研究" },
 ];
 const themeOptions: { value: ThemeMode; label: string }[] = [
   { value: "light", label: "浅色" },
   { value: "dark", label: "深色" },
+  { value: "apple", label: "浅色苹果" },
+  { value: "apple-dark", label: "深色苹果" },
+  { value: "gemini-light", label: "浅色Gemini" },
+  { value: "gemini", label: "深色Gemini" },
+  { value: "goose", label: "鹅黄" },
   { value: "github", label: "GitHub" },
   { value: "chrome", label: "Chrome" },
   { value: "auto", label: "跟随系统" },
@@ -28,11 +44,18 @@ const themeMode = ref<ThemeMode>("auto");
 const isLhbV3 = computed(() => route.path === "/lhb-v3");
 const isResearch = computed(() => route.path === "/research");
 const isCapitalFlow = computed(() => route.path === "/capital-flow");
+const isKline = computed(() => route.path === "/kline");
+const isQuant = computed(() => route.path === "/quant");
 const flushMain = computed(
-  () => isLhbV3.value || isResearch.value || isCapitalFlow.value,
+  () =>
+    isLhbV3.value ||
+    isResearch.value ||
+    isCapitalFlow.value ||
+    isKline.value ||
+    isQuant.value,
 );
 
-/** 仅标题/主题行消隐；导航药丸常显 */
+/** 钉子锁定后占位下沉；未锁定则为顶部浮动覆盖 */
 const headerPinned = ref(localStorage.getItem(HEADER_PIN_KEY) === "1");
 const headerRevealed = ref(false);
 let hideTimer: ReturnType<typeof setTimeout> | null = null;
@@ -59,7 +82,7 @@ function scheduleHideHeader() {
   hideTimer = setTimeout(() => {
     headerRevealed.value = false;
     hideTimer = null;
-  }, 280);
+  }, 220);
 }
 
 function toggleHeaderPin() {
@@ -118,18 +141,21 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app-shell flex h-screen flex-col overflow-hidden bg-bg">
+    <!-- 顶部热区：未钉住时划入即唤出版头 -->
     <div
+      v-show="!headerPinned"
       class="header-hit"
       aria-hidden="true"
       @mouseenter="revealHeader"
     />
 
-    <!-- 标题 + 主题：可消隐 / 钉住 -->
+    <!-- 版头：默认浮动覆盖；钉子锁定后才占位下沉 -->
     <div
       class="brand-bar shrink-0 bg-bg-elevated px-6 pt-5"
       :class="{
         'brand-bar-hidden': !brandVisible,
         'brand-bar-pinned': headerPinned,
+        'brand-bar-float': !headerPinned,
       }"
       @mouseenter="revealHeader"
       @mouseleave="scheduleHideHeader"
@@ -157,7 +183,7 @@ onBeforeUnmount(() => {
             type="button"
             class="header-pin"
             :class="{ 'header-pin-on': headerPinned }"
-            :title="headerPinned ? '取消固定顶栏' : '固定顶栏'"
+            :title="headerPinned ? '取消固定（恢复浮动消隐）' : '固定顶栏（页面下沉衔接）'"
             :aria-pressed="headerPinned"
             @click="toggleHeaderPin"
           >
@@ -172,7 +198,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- 导航：始终可见，等宽主题色细边框药丸 -->
+    <!-- 导航：始终可见 -->
     <nav class="nav-pills shrink-0 bg-bg-elevated px-6 py-2.5" aria-label="主导航">
       <router-link
         v-for="item in navItems"
@@ -208,35 +234,100 @@ onBeforeUnmount(() => {
   top: 0;
   left: 0;
   right: 0;
-  height: 10px;
-  z-index: 60;
+  height: 12px;
+  z-index: 70;
 }
 
 .brand-bar {
-  position: relative;
-  z-index: 50;
-  transform: translateY(0);
-  opacity: 1;
-  max-height: 120px;
-  overflow: hidden;
+  z-index: 60;
+  background: var(--color-bg-elevated);
   transition:
-    transform 0.28s ease,
-    opacity 0.22s ease,
-    max-height 0.28s ease,
-    padding 0.28s ease;
+    transform 0.26s ease,
+    opacity 0.2s ease,
+    box-shadow 0.26s ease,
+    background 0.26s ease;
+}
+
+/* 未钉住：绝对定位浮动，不占文档流 → 下面页面不下沉 */
+.brand-bar-float {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* 浮出时下边缘小阴影，表示盖在页面上 */
+  box-shadow:
+    0 4px 14px rgb(15 23 42 / 16%),
+    0 1px 0 color-mix(in srgb, var(--color-border) 80%, transparent);
+}
+
+.brand-bar-float.brand-bar-hidden {
+  box-shadow: none;
+}
+
+/* 钉住：回到文档流，页面自动下沉衔接 */
+.brand-bar-pinned {
+  position: relative;
+  box-shadow: none;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .brand-bar-hidden {
-  transform: translateY(-100%);
+  transform: translateY(calc(-100% - 4px));
   opacity: 0;
-  max-height: 0;
-  padding-top: 0 !important;
-  padding-bottom: 0 !important;
   pointer-events: none;
 }
 
-.brand-bar-pinned {
-  box-shadow: none;
+/* Apple / Gemini：版头与导航使用 Liquid Glass */
+:global(html[data-theme="apple"]) .brand-bar,
+:global(html[data-theme="apple-dark"]) .brand-bar,
+:global(html[data-theme="gemini-light"]) .brand-bar,
+:global(html[data-theme="gemini"]) .brand-bar,
+:global(html[data-theme="apple"]) .nav-pills,
+:global(html[data-theme="apple-dark"]) .nav-pills,
+:global(html[data-theme="gemini-light"]) .nav-pills,
+:global(html[data-theme="gemini"]) .nav-pills {
+  background: var(--glass-bg);
+  background-color: var(--color-bg-elevated);
+  border-color: var(--glass-border);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+}
+
+:global(html[data-theme="apple"]) .brand-bar-float,
+:global(html[data-theme="apple-dark"]) .brand-bar-float,
+:global(html[data-theme="gemini-light"]) .brand-bar-float,
+:global(html[data-theme="gemini"]) .brand-bar-float {
+  box-shadow: var(--glass-shadow);
+}
+
+:global(html[data-theme="apple"]) .nav-pill,
+:global(html[data-theme="apple-dark"]) .nav-pill,
+:global(html[data-theme="gemini-light"]) .nav-pill,
+:global(html[data-theme="gemini"]) .nav-pill {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+:global(html[data-theme="apple"]) .nav-pill:active,
+:global(html[data-theme="apple-dark"]) .nav-pill:active,
+:global(html[data-theme="gemini-light"]) .nav-pill:active,
+:global(html[data-theme="gemini"]) .nav-pill:active {
+  transform: scale(0.98);
+}
+
+:global(html[data-theme="apple"]) .app-shell,
+:global(html[data-theme="apple-dark"]) .app-shell,
+:global(html[data-theme="gemini-light"]) .app-shell,
+:global(html[data-theme="gemini"]) .app-shell,
+:global(html[data-theme="goose"]) .app-shell {
+  background: transparent;
+}
+
+:global(html[data-theme="goose"]) .brand-bar,
+:global(html[data-theme="goose"]) .nav-pills {
+  background: #fffceb;
+  border-color: color-mix(in srgb, #96939b 42%, #faf4d3);
 }
 
 .header-right {

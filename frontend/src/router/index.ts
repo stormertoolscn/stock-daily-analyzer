@@ -35,6 +35,11 @@ const router = createRouter({
           component: () => import("@/views/CapitalFlow.vue"),
         },
         {
+          path: "quant",
+          name: "quant",
+          component: () => import("@/views/Quant.vue"),
+        },
+        {
           path: "research",
           name: "research",
           component: () => import("@/views/Research.vue"),
