@@ -4,7 +4,7 @@
  * 样式参考 CB Insights「Y Combinator 投资主题地图」的嵌套气泡打包布局：
  * 中心=股票，外围按 机构 / 游资 / 通道 分组，组内席位气泡大小=金额，红买绿卖。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 
 import { formatAmount, type LhbGraphEdge, type LhbGraphNode } from "@/api/lhb";
 
@@ -197,10 +197,174 @@ const bubbleFill = computed(() => {
 });
 
 const hasAny = computed(() => props.nodes.length > 0);
+
+/* ============ 方案切换：气泡打包 / 堆叠柱 / 环形占比 ============ */
+type GraphMode = "bubble" | "stacked" | "donut";
+
+const MODES: { id: GraphMode; label: string; icon: string }[] = [
+  { id: "bubble", label: "气泡打包图", icon: "◉" },
+  { id: "stacked", label: "堆叠柱图", icon: "▤" },
+  { id: "donut", label: "环形占比图", icon: "◍" },
+];
+const GRAPH_MODE_KEY = "sda-lhb-graph-mode";
+
+function readSavedMode(): GraphMode {
+  try {
+    const v = localStorage.getItem(GRAPH_MODE_KEY);
+    if (v === "bubble" || v === "stacked" || v === "donut") return v;
+  } catch {
+    /* ignore */
+  }
+  return "bubble";
+}
+
+const mode = ref<GraphMode>(readSavedMode());
+
+function selectMode(m: GraphMode) {
+  mode.value = m;
+  try {
+    localStorage.setItem(GRAPH_MODE_KEY, m);
+  } catch {
+    /* ignore */
+  }
+}
+
+/* ---- 堆叠柱数据：买入 / 卖出各一段，席位按类别着色 ---- */
+interface StackSeg {
+  label: string;
+  fullLabel: string;
+  value: number;
+  color: string;
+}
+
+const stackedBars = computed(() => {
+  const buy: StackSeg[] = [];
+  const sell: StackSeg[] = [];
+  for (const g of groups.value) {
+    for (const b of g.bubbles) {
+      if (b.buy > 0) {
+        buy.push({ label: b.label, fullLabel: b.fullLabel, value: b.buy, color: g.color });
+      }
+      if (b.sell > 0) {
+        sell.push({ label: b.label, fullLabel: b.fullLabel, value: b.sell, color: g.color });
+      }
+    }
+  }
+  buy.sort((a, b) => b.value - a.value);
+  sell.sort((a, b) => b.value - a.value);
+  return { buy, sell };
+});
+
+const buyTotal = computed(() => stackedBars.value.buy.reduce((s, x) => s + x.value, 0));
+const sellTotal = computed(() => stackedBars.value.sell.reduce((s, x) => s + x.value, 0));
+
+/* ---- 环形数据：按席位类别净买入占比 ---- */
+const donutSlices = computed(() =>
+  groups.value.map((g) => ({
+    kind: g.kind,
+    label: g.label,
+    color: g.color,
+    net: g.buyTotal - g.sellTotal,
+  })),
+);
+const donutTotal = computed(() =>
+  donutSlices.value.reduce((s, x) => s + Math.max(x.net, 0), 0),
+);
+
+/* ---- 堆叠柱 SVG 布局常量 ---- */
+const BAR_W = 96;
+const BAR_X_BUY = 195;
+const BAR_X_SELL = 430;
+const BAR_TOP = 78;
+const BAR_BOTTOM = 470;
+const BAR_HEIGHT = BAR_BOTTOM - BAR_TOP;
+
+function stackedSegs(kind: "buy" | "sell"): { segs: StackSeg[]; total: number } {
+  const segs = kind === "buy" ? stackedBars.value.buy : stackedBars.value.sell;
+  const total = kind === "buy" ? buyTotal.value : sellTotal.value;
+  return { segs, total };
+}
+
+function segRects(kind: "buy" | "sell") {
+  const { segs, total } = stackedSegs(kind);
+  const x = kind === "buy" ? BAR_X_BUY : BAR_X_SELL;
+  let acc = 0;
+  return segs.map((s) => {
+    const h = total > 0 ? (s.value / total) * BAR_HEIGHT : 0;
+    const rect = {
+      x,
+      y: BAR_BOTTOM - acc - h,
+      w: BAR_W,
+      h,
+      seg: s,
+      showText: h >= 22,
+      pct: total > 0 ? (s.value / total) * 100 : 0,
+    };
+    acc += h;
+    return rect;
+  });
+}
+
+/* ---- 环形 SVG 布局常量 ---- */
+const DONUT_CX = 310;
+const DONUT_CY = 270;
+const DONUT_R = 112;
+const DONUT_STROKE = 44;
+const DONUT_C = 2 * Math.PI * DONUT_R;
+
+const stackedLegend = computed(() => {
+  const map = new Map<
+    string,
+    { label: string; color: string; buy: number; sell: number }
+  >();
+  for (const b of stackedBars.value.buy) {
+    const it = map.get(b.label) ?? { label: b.label, color: b.color, buy: 0, sell: 0 };
+    it.buy += b.value;
+    map.set(b.label, it);
+  }
+  for (const s of stackedBars.value.sell) {
+    const it = map.get(s.label) ?? { label: s.label, color: s.color, buy: 0, sell: 0 };
+    it.sell += s.value;
+    map.set(s.label, it);
+  }
+  return [...map.values()];
+});
+function donutArcs() {
+  const total = donutTotal.value || 1;
+  let offset = 0;
+  return donutSlices.value
+    .filter((s) => s.net > 0)
+    .map((s) => {
+      const frac = s.net / total;
+      const arc = {
+        ...s,
+        frac,
+        dash: `${frac * DONUT_C} ${DONUT_C}`,
+        offset: -offset * DONUT_C,
+      };
+      offset += frac;
+      return arc;
+    });
+}
 </script><template>
   <div class="relative h-full min-h-[360px] w-full overflow-hidden rounded-lg border border-border bg-bg">
+    <div class="lhb-toolbar">
+      <div class="lhb-modes">
+        <button
+          v-for="m in MODES"
+          :key="m.id"
+          type="button"
+          class="lhb-mode-btn"
+          :class="{ 'lhb-mode-active': mode === m.id }"
+          :title="m.label"
+          @click="selectMode(m.id)"
+        >
+          {{ m.icon }}
+        </button>
+      </div>
+    </div>
     <svg
-      v-if="hasAny"
+      v-if="hasAny && mode === 'bubble'"
       class="lhb-svg"
       :viewBox="`0 0 ${W} ${H}`"
       preserveAspectRatio="xMidYMid meet"
@@ -310,6 +474,208 @@ const hasAny = computed(() => props.nodes.length > 0);
         <text x="0" y="10" font-size="10" fill="var(--color-text-muted)">气泡大小 = 席位金额</text>
       </g>
     </svg>
+    <svg
+      v-else-if="hasAny && mode === 'stacked'"
+      class="lhb-svg"
+      :viewBox="`0 0 ${W} ${H}`"
+      preserveAspectRatio="xMidYMid meet"
+    >
+      <g v-for="p in [0, 25, 50, 75, 100]" :key="p">
+        <line
+          :x1="80"
+          :x2="556"
+          :y1="BAR_BOTTOM - (p / 100) * BAR_HEIGHT"
+          :y2="BAR_BOTTOM - (p / 100) * BAR_HEIGHT"
+          stroke="var(--color-border)"
+          stroke-width="1"
+          stroke-dasharray="3 4"
+        />
+        <text
+          :x="72"
+          :y="BAR_BOTTOM - (p / 100) * BAR_HEIGHT + 3"
+          text-anchor="end"
+          font-size="9"
+          fill="var(--color-text-muted)"
+        >
+          {{ p }}%
+        </text>
+      </g>
+
+      <text
+        :x="BAR_X_BUY + BAR_W / 2"
+        :y="BAR_TOP - 16"
+        text-anchor="middle"
+        font-size="12"
+        font-weight="700"
+        fill="var(--color-text)"
+      >
+        买入 · {{ formatAmount(buyTotal) }}
+      </text>
+      <rect
+        v-for="(r, i) in segRects('buy')"
+        :key="'b' + i"
+        :x="r.x"
+        :y="r.y"
+        :width="r.w"
+        :height="Math.max(r.h, 0)"
+        :fill="r.seg.color"
+        fill-opacity="0.9"
+      >
+        <title>{{ r.seg.fullLabel }} · {{ formatAmount(r.seg.value) }}（{{ r.pct.toFixed(1) }}%）</title>
+      </rect>
+      <g v-for="(r, i) in segRects('buy')" :key="'bt' + i">
+        <text
+          v-if="r.showText"
+          :x="r.x + r.w / 2"
+          :y="r.y + 14"
+          text-anchor="middle"
+          font-size="9.5"
+          font-weight="650"
+          fill="#fff"
+        >
+          {{ formatAmount(r.seg.value) }}
+        </text>
+      </g>
+
+      <text
+        :x="BAR_X_SELL + BAR_W / 2"
+        :y="BAR_TOP - 16"
+        text-anchor="middle"
+        font-size="12"
+        font-weight="700"
+        fill="var(--color-text)"
+      >
+        卖出 · {{ formatAmount(sellTotal) }}
+      </text>
+      <rect
+        v-for="(r, i) in segRects('sell')"
+        :key="'s' + i"
+        :x="r.x"
+        :y="r.y"
+        :width="r.w"
+        :height="Math.max(r.h, 0)"
+        :fill="r.seg.color"
+        fill-opacity="0.9"
+      >
+        <title>{{ r.seg.fullLabel }} · {{ formatAmount(r.seg.value) }}（{{ r.pct.toFixed(1) }}%）</title>
+      </rect>
+      <g v-for="(r, i) in segRects('sell')" :key="'st' + i">
+        <text
+          v-if="r.showText"
+          :x="r.x + r.w / 2"
+          :y="r.y + 14"
+          text-anchor="middle"
+          font-size="9.5"
+          font-weight="650"
+          fill="#fff"
+        >
+          {{ formatAmount(r.seg.value) }}
+        </text>
+      </g>
+
+      <g transform="translate(560, 64)">
+        <text x="0" y="10" font-size="11" font-weight="700" fill="var(--color-text)">席位</text>
+        <g
+          v-for="(s, i) in stackedLegend"
+          :key="s.label"
+          :transform="`translate(0, ${24 + i * 30})`"
+        >
+          <rect width="11" height="11" rx="2" :fill="s.color" />
+          <text x="17" y="9" font-size="10" font-weight="600" fill="var(--color-text)">
+            {{ s.label }}
+          </text>
+          <text x="17" y="22" font-size="9" fill="var(--color-text-muted)">
+            买 {{ formatAmount(s.buy) }} · 卖 {{ formatAmount(s.sell) }}
+          </text>
+        </g>
+      </g>
+    </svg>
+
+    <svg
+      v-else-if="hasAny && mode === 'donut'"
+      class="lhb-svg"
+      :viewBox="`0 0 ${W} ${H}`"
+      preserveAspectRatio="xMidYMid meet"
+    >
+      <circle
+        :cx="DONUT_CX"
+        :cy="DONUT_CY"
+        :r="DONUT_R"
+        fill="none"
+        stroke="var(--color-border)"
+        :stroke-width="DONUT_STROKE"
+        opacity="0.45"
+      />
+      <circle
+        v-for="a in donutArcs()"
+        :key="a.kind"
+        :cx="DONUT_CX"
+        :cy="DONUT_CY"
+        :r="DONUT_R"
+        fill="none"
+        :stroke="a.color"
+        :stroke-width="DONUT_STROKE"
+        :stroke-dasharray="a.dash"
+        :stroke-dashoffset="a.offset"
+        transform="rotate(-90 310 270)"
+      >
+        <title>{{ a.label }} 净买 {{ formatAmount(a.net) }} · {{ (a.frac * 100).toFixed(1) }}%</title>
+      </circle>
+      <text
+        :x="DONUT_CX"
+        :y="DONUT_CY - 16"
+        text-anchor="middle"
+        font-size="15"
+        font-weight="750"
+        fill="var(--color-text)"
+      >
+        {{ stock?.label }}
+      </text>
+      <text
+        :x="DONUT_CX"
+        :y="DONUT_CY + 6"
+        text-anchor="middle"
+        font-size="11"
+        fill="var(--color-text-muted)"
+      >
+        {{ stock?.code }}
+      </text>
+      <text
+        :x="DONUT_CX"
+        :y="DONUT_CY + 28"
+        text-anchor="middle"
+        font-size="10"
+        font-weight="650"
+        fill="var(--color-accent)"
+      >
+        净买 {{ formatAmount(donutTotal) }}
+      </text>
+      <g transform="translate(500, 118)">
+        <text x="0" y="8" font-size="11" font-weight="700" fill="var(--color-text)">净买入占比</text>
+        <g
+          v-for="(s, i) in donutSlices"
+          :key="s.kind"
+          :transform="`translate(0, ${26 + i * 46})`"
+        >
+          <circle cx="6" cy="0" r="6" :fill="s.color" />
+          <text x="18" y="4" font-size="11" font-weight="600" fill="var(--color-text)">
+            {{ s.label }}
+          </text>
+          <text x="18" y="19" font-size="10" fill="var(--color-text-muted)">
+            {{ formatAmount(s.net) }}
+          </text>
+          <text
+            x="120"
+            y="4"
+            font-size="11"
+            font-weight="700"
+            :fill="s.net >= 0 ? 'var(--color-up)' : 'var(--color-down)'"
+          >
+            {{ donutTotal > 0 && s.net > 0 ? ((s.net / donutTotal) * 100).toFixed(1) + '%' : '—' }}
+          </text>
+        </g>
+      </g>
+    </svg>
     <div
       v-else
       class="absolute inset-0 flex items-center justify-center text-sm text-text-muted"
@@ -326,6 +692,51 @@ const hasAny = computed(() => props.nodes.length > 0);
   display: block;
 }
 
+.lhb-toolbar {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
+}
+
+.lhb-modes {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-bg-elevated) 92%, transparent);
+  box-shadow: 0 2px 8px rgb(15 23 42 / 10%);
+}
+
+.lhb-mode-btn {
+  appearance: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 15px;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.lhb-mode-btn:hover {
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+
+.lhb-mode-active {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
 .lhb-seat {
   cursor: default;
   transition: opacity 0.15s ease;
