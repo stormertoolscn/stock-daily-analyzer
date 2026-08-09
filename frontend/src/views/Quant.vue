@@ -5,7 +5,27 @@
  * （大标题 Hero + 各大区 H2 + 子模块卡片/表格占位）
  * 主题沿用项目默认主题变量，不搬目标站配色。
  */
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
+
+import {
+  fetchFundFlowReview,
+  formatFlowAmount,
+  type FundFlowReview,
+} from "@/api/fundflow";
+import {
+  fetchHotMoneyList,
+  fetchHotMoneyTrades,
+  fetchLhbDaily,
+  fetchLhbDominance,
+  formatAmount,
+  formatPct,
+  type HotMoneyTradeItem,
+  type HotMoneyTrader,
+  type LhbDailyItem,
+  type LhbDominanceItem,
+} from "@/api/lhb";
+import { searchStocks, type StockSearchItem } from "@/api/stock";
 
 defineOptions({ name: "Quant" });
 
@@ -19,6 +39,7 @@ type QuantCard = {
   to?: string;
   cols?: string[];
   span?: boolean;
+  live?: string;
 };
 
 type QuantSection = {
@@ -47,11 +68,13 @@ const sections: QuantSection[] = [
         title: "大盘实时 · 成交与拥挤",
         desc: "指数实时涨跌 · 全市场成交额 · 拥挤度(成交额前20股占比)",
         status: "加载大盘实时中…",
+        live: "market",
       },
       {
         title: "今日市场情绪 · 赚钱效应",
         desc: "全市场涨跌家数 + 涨停跌停 · 大盘冷热一眼看",
         status: "加载市场情绪中…",
+        live: "sentiment",
         to: "/capital-flow",
       },
       {
@@ -68,12 +91,14 @@ const sections: QuantSection[] = [
         title: "主力资金 · 今日看点",
         desc: "主力大额净流入 + 逆势吸筹（真金白银在进的票）",
         status: "加载主力资金看点中…",
+        live: "inflow",
         to: "/capital-flow",
       },
       {
         title: "主力 × 游资 · 今日共识",
         desc: "主力(大单+超大单)与游资(龙虎榜席位)同日双双净买入 · ⚡三重共振=模型也选中",
         status: "加载主力×游资共识中…",
+        live: "consensus",
         to: "/lhb-v3",
       },
     ],
@@ -287,6 +312,7 @@ const sections: QuantSection[] = [
         title: "全市场技术形态扫描",
         desc: "蜡烛形态 + MACD / 均线 / 量价等指标组合条件找股",
         status: "加载技术找股模块中…",
+        live: "tech-search",
         to: "/kline",
         span: true,
       },
@@ -341,6 +367,7 @@ const sections: QuantSection[] = [
         title: "🌊 资金流全景",
         desc: "统一资金流模型：流向·流量·流速·持续·质量 —— 机构/游资/散户分层 × 杠杆 × ETF场外 × 板块迁徙 一屏看清",
         status: "加载资金流全景中…",
+        live: "panorama",
       },
       {
         title: "🧭 今日重点方向",
@@ -356,6 +383,7 @@ const sections: QuantSection[] = [
         title: "主力资金雷达",
         desc: "找主力资金在哪里 · 全市场主力(大单+超大单)净流向",
         status: "加载主力资金雷达中…",
+        live: "radar",
         to: "/capital-flow",
       },
       {
@@ -373,6 +401,7 @@ const sections: QuantSection[] = [
         title: "板块资金轮动",
         desc: "资金在往哪个概念板块走 · 今日板块净流入涌入榜 + 撤离榜（点板块看成分股）",
         status: "加载板块资金轮动中…",
+        live: "themes",
         to: "/capital-flow",
       },
       {
@@ -384,12 +413,14 @@ const sections: QuantSection[] = [
         title: "今日龙虎榜",
         desc: "谁上榜 · 游资 / 机构席位真金白银在扫谁",
         status: "加载龙虎榜中…",
+        live: "lhb-today",
         to: "/lhb",
       },
       {
         title: "龙虎榜霸榜 · 近10日",
         desc: "近10日频繁上榜的强势股 · 游资持续接力 / 高位换手龙头（点🔍看席位）",
         status: "加载龙虎榜霸榜中…",
+        live: "dominance",
         to: "/lhb-v3",
       },
       {
@@ -416,6 +447,7 @@ const sections: QuantSection[] = [
         title: "游资动向 · 谁在抢票",
         desc: "知名游资今日净买（已剔除机构/北向席位）· 席位名可看简介",
         status: "加载游资动向中…",
+        live: "hotmoney",
         to: "/lhb-v3",
       },
       {
@@ -730,6 +762,183 @@ const sections: QuantSection[] = [
 function go(to: string) {
   void router.push(to);
 }
+/* ============ 内部数据拉通：资金复盘 / 龙虎榜 / 游资 / 搜索 ============ */
+
+const fundflow = ref<FundFlowReview | null>(null);
+const lhbDaily = ref<LhbDailyItem[]>([]);
+const lhbDailyDate = ref("");
+const dominance = ref<LhbDominanceItem[]>([]);
+const dominanceMeta = ref<{ days: number; count: number } | null>(null);
+const hotMoneyList = ref<HotMoneyTrader[]>([]);
+const hotMoneyTrades = ref<HotMoneyTradeItem[]>([]);
+const hotMoneyTrader = ref<HotMoneyTrader | null>(null);
+const hotMoneyBusy = ref(false);
+const liveLoading = ref(false);
+const liveError = ref("");
+
+const searchQuery = ref("");
+const searchResults = ref<StockSearchItem[]>([]);
+const searchBusy = ref(false);
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+let liveAbort: AbortController | null = null;
+
+function liveMsg(e: unknown): string {
+  if ((e as Error).name === "AbortError") return "";
+  return e instanceof Error ? e.message : "加载失败";
+}
+
+async function loadLive() {
+  liveAbort?.abort();
+  liveAbort = new AbortController();
+  const signal = liveAbort.signal;
+  liveLoading.value = true;
+  liveError.value = "";
+  const jobs: Promise<void>[] = [
+    fetchFundFlowReview(false, undefined, signal)
+      .then((d) => {
+        fundflow.value = d;
+      })
+      .catch((e) => {
+        const m = liveMsg(e);
+        if (m) liveError.value += `资金复盘：${m}。`;
+      }),
+    fetchLhbDaily(null, signal)
+      .then((d) => {
+        lhbDaily.value = d.items;
+        lhbDailyDate.value = d.trade_date;
+      })
+      .catch((e) => {
+        const m = liveMsg(e);
+        if (m) liveError.value += `龙虎榜：${m}。`;
+      }),
+    fetchLhbDominance(10, signal)
+      .then((d) => {
+        dominance.value = d.items;
+        dominanceMeta.value = { days: d.days, count: d.count };
+      })
+      .catch((e) => {
+        const m = liveMsg(e);
+        if (m) liveError.value += `霸榜：${m}。`;
+      }),
+    fetchHotMoneyList(null, signal)
+      .then((d) => {
+        hotMoneyList.value = d;
+      })
+      .catch((e) => {
+        const m = liveMsg(e);
+        if (m) liveError.value += `游资名录：${m}。`;
+      }),
+  ];
+  await Promise.allSettled(jobs);
+  if (!signal.aborted) liveLoading.value = false;
+}
+
+const inflowTop = computed(() => (fundflow.value?.inflows ?? []).slice(0, 8));
+const outflowTop = computed(() => (fundflow.value?.outflows ?? []).slice(0, 6));
+const themesIn = computed(() =>
+  (fundflow.value?.themes ?? []).filter((t) => t.side === "in"),
+);
+const themesOut = computed(() =>
+  (fundflow.value?.themes ?? []).filter((t) => t.side === "out"),
+);
+const lhbTop = computed(() =>
+  [...lhbDaily.value]
+    .sort((a, b) => Math.abs(b.net_buy) - Math.abs(a.net_buy))
+    .slice(0, 8),
+);
+const dominanceTop = computed(() => dominance.value.slice(0, 8));
+const marketRows = computed(() => {
+  const m = fundflow.value?.market;
+  if (!m) return null;
+  return [
+    { label: "上证", value: m.sh },
+    { label: "深证", value: m.sz },
+    { label: "创业板", value: m.cyb },
+  ];
+});
+const consensusRows = computed(() => {
+  if (!fundflow.value || !lhbDaily.value.length) return [];
+  const byCode = new Map(lhbDaily.value.map((i) => [i.code, i]));
+  return (fundflow.value.inflows ?? [])
+    .filter((f) => byCode.has(f.code))
+    .map((f) => ({ fund: f, lhb: byCode.get(f.code)! }))
+    .slice(0, 6);
+});
+const hotMoneyFeatured = computed(() =>
+  [...hotMoneyList.value]
+    .filter((h) => h.featured)
+    .sort((a, b) => (b.tier ?? "A").localeCompare(a.tier ?? "A"))
+    .slice(0, 6),
+);
+
+function pctClass(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return "";
+  return v > 0 ? "up" : v < 0 ? "down" : "";
+}
+
+function signedPct(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return "—";
+  const sign = v > 0 ? "+" : "";
+  return `${sign}${v.toFixed(2)}%`;
+}
+
+function openKline(code: string, name: string) {
+  void router.push({ name: "kline", query: { code, name } });
+}
+
+async function loadHotMoneyTrades(trader: HotMoneyTrader) {
+  if (hotMoneyBusy.value) return;
+  hotMoneyBusy.value = true;
+  hotMoneyTrader.value = trader;
+  hotMoneyTrades.value = [];
+  try {
+    const d = await fetchHotMoneyTrades(trader.id, { days: 7 });
+    hotMoneyTrades.value = d.items;
+  } catch {
+    hotMoneyTrades.value = [];
+    hotMoneyTrader.value = null;
+  } finally {
+    hotMoneyBusy.value = false;
+  }
+}
+
+async function doSearch() {
+  const q = searchQuery.value.trim();
+  if (!q) {
+    searchResults.value = [];
+    return;
+  }
+  searchBusy.value = true;
+  try {
+    searchResults.value = await searchStocks(q, 8);
+  } catch {
+    searchResults.value = [];
+  } finally {
+    searchBusy.value = false;
+  }
+}
+
+function onSearchInput() {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    void doSearch();
+  }, 260);
+}
+
+function pickSearch(item: StockSearchItem) {
+  searchQuery.value = "";
+  searchResults.value = [];
+  openKline(item.code, item.name);
+}
+
+onMounted(() => {
+  void loadLive();
+});
+
+onBeforeUnmount(() => {
+  liveAbort?.abort();
+  if (searchTimer) clearTimeout(searchTimer);
+});
 </script>
 
 <template>
@@ -792,8 +1001,248 @@ function go(to: string) {
             <span v-if="c.badge" class="qnt-badge">{{ c.badge }}</span>
           </header>
           <p v-if="c.desc" class="qnt-desc">{{ c.desc }}</p>
+          <div v-if="c.live" class="qnt-live">
+            <!-- 大盘实时 -->
+            <template v-if="c.live === 'market'">
+              <div v-if="liveLoading && !marketRows" class="qnt-live-empty">正在加载大盘资金…</div>
+              <div v-else-if="marketRows" class="qnt-metrics">
+                <div v-for="m in marketRows" :key="m.label" class="qnt-metric">
+                  <span>{{ m.label }}</span>
+                  <strong :class="pctClass(m.value)">{{ formatFlowAmount(m.value) }}</strong>
+                </div>
+              </div>
+              <div v-else class="qnt-live-empty">
+                今日全市场主力：净流入合计 {{ formatFlowAmount(fundflow?.inflow_total) }} · 净流出合计 {{ formatFlowAmount(fundflow?.outflow_total) }}
+              </div>
+            </template>
 
-          <table v-if="c.cols" class="qnt-table">
+            <!-- 市场情绪综述 -->
+            <template v-else-if="c.live === 'sentiment'">
+              <div v-if="fundflow?.summary" class="qnt-summary">{{ fundflow.summary }}</div>
+              <div v-else-if="liveLoading" class="qnt-live-empty">正在加载市场情绪…</div>
+              <div v-else class="qnt-live-empty">暂无情绪数据</div>
+              <div v-if="fundflow" class="qnt-chip-row">
+                <span class="qnt-tag up">净流入 {{ (fundflow.inflows ?? []).length }} 家</span>
+                <span class="qnt-tag down">净流出 {{ (fundflow.outflows ?? []).length }} 家</span>
+                <span v-if="lhbDaily.length" class="qnt-tag">龙虎榜 {{ lhbDaily.length }} 家</span>
+              </div>
+            </template>
+
+            <!-- 主力资金看点 -->
+            <template v-else-if="c.live === 'inflow'">
+              <div v-if="inflowTop.length" class="qnt-rows">
+                <button
+                  v-for="row in inflowTop"
+                  :key="row.code"
+                  type="button"
+                  class="qnt-row"
+                  @dblclick="openKline(row.code, row.name)"
+                >
+                  <span class="qnt-rank">{{ row.rank }}</span>
+                  <span class="qnt-id"><strong>{{ row.name }}</strong><em>{{ row.code }}</em></span>
+                  <span class="qnt-num up">{{ formatFlowAmount(row.net_amount) }}</span>
+                  <span class="qnt-num" :class="pctClass(row.change_pct)">{{ signedPct(row.change_pct) }}</span>
+                </button>
+              </div>
+              <div v-else-if="liveLoading" class="qnt-live-empty">正在加载主力资金…</div>
+              <div v-else class="qnt-live-empty">暂无主力净流入数据</div>
+            </template>
+
+            <!-- 主力 × 游资 共识 -->
+            <template v-else-if="c.live === 'consensus'">
+              <div v-if="consensusRows.length" class="qnt-rows">
+                <button
+                  v-for="r in consensusRows"
+                  :key="r.fund.code"
+                  type="button"
+                  class="qnt-row"
+                  @dblclick="openKline(r.fund.code, r.fund.name)"
+                >
+                  <span class="qnt-id"><strong>{{ r.fund.name }}</strong><em>{{ r.fund.code }}</em></span>
+                  <span class="qnt-num up">{{ formatFlowAmount(r.fund.net_amount) }}</span>
+                  <span class="qnt-num" :class="pctClass(r.lhb.net_buy)">{{ formatAmount(r.lhb.net_buy) }}</span>
+                </button>
+              </div>
+              <div v-else-if="liveLoading" class="qnt-live-empty">正在比对主力 × 龙虎榜…</div>
+              <div v-else class="qnt-live-empty">今日暂无主力 × 游资共振（两榜无同日交集）</div>
+            </template>
+
+            <!-- 资金流全景 -->
+            <template v-else-if="c.live === 'panorama'">
+              <div v-if="fundflow" class="qnt-metrics qnt-metrics-2">
+                <div class="qnt-metric"><span>净流入合计</span><strong class="up">{{ formatFlowAmount(fundflow.inflow_total) }}</strong></div>
+                <div class="qnt-metric"><span>净流出合计</span><strong class="down">{{ formatFlowAmount(fundflow.outflow_total) }}</strong></div>
+                <div class="qnt-metric"><span>题材方向</span><strong>{{ (fundflow.themes ?? []).length }}</strong></div>
+                <div class="qnt-metric"><span>龙虎榜家数</span><strong>{{ lhbDaily.length }}</strong></div>
+              </div>
+              <div v-else-if="liveLoading" class="qnt-live-empty">正在加载资金全景…</div>
+              <div v-else class="qnt-live-empty">暂无资金全景数据</div>
+            </template>
+
+            <!-- 主力资金雷达 -->
+            <template v-else-if="c.live === 'radar'">
+              <div v-if="inflowTop.length || outflowTop.length" class="qnt-split">
+                <div class="qnt-split-col">
+                  <h4 class="up">净流入</h4>
+                  <button
+                    v-for="row in inflowTop.slice(0, 5)"
+                    :key="'i' + row.code"
+                    type="button"
+                    class="qnt-row"
+                    @dblclick="openKline(row.code, row.name)"
+                  >
+                    <span class="qnt-id"><strong>{{ row.name }}</strong><em>{{ row.code }}</em></span>
+                    <span class="qnt-num up">{{ formatFlowAmount(row.net_amount) }}</span>
+                  </button>
+                </div>
+                <div class="qnt-split-col">
+                  <h4 class="down">净流出</h4>
+                  <button
+                    v-for="row in outflowTop.slice(0, 5)"
+                    :key="'o' + row.code"
+                    type="button"
+                    class="qnt-row"
+                    @dblclick="openKline(row.code, row.name)"
+                  >
+                    <span class="qnt-id"><strong>{{ row.name }}</strong><em>{{ row.code }}</em></span>
+                    <span class="qnt-num down">{{ formatFlowAmount(row.net_amount) }}</span>
+                  </button>
+                </div>
+              </div>
+              <div v-else-if="liveLoading" class="qnt-live-empty">正在加载主力雷达…</div>
+              <div v-else class="qnt-live-empty">暂无主力资金雷达数据</div>
+            </template>
+
+            <!-- 板块资金轮动 -->
+            <template v-else-if="c.live === 'themes'">
+              <div v-if="themesIn.length || themesOut.length" class="qnt-theme-block">
+                <div v-if="themesIn.length" class="qnt-theme-row">
+                  <span class="qnt-theme-label up">涌入</span>
+                  <span
+                    v-for="t in themesIn.slice(0, 5)"
+                    :key="t.name"
+                    class="qnt-tag up"
+                    :title="formatFlowAmount(t.net_amount)"
+                  >{{ t.name }} {{ formatFlowAmount(t.net_amount) }}</span>
+                </div>
+                <div v-if="themesOut.length" class="qnt-theme-row">
+                  <span class="qnt-theme-label down">撤离</span>
+                  <span
+                    v-for="t in themesOut.slice(0, 5)"
+                    :key="t.name"
+                    class="qnt-tag down"
+                    :title="formatFlowAmount(t.net_amount)"
+                  >{{ t.name }} {{ formatFlowAmount(t.net_amount) }}</span>
+                </div>
+              </div>
+              <div v-else-if="liveLoading" class="qnt-live-empty">正在加载板块轮动…</div>
+              <div v-else class="qnt-live-empty">暂无板块资金数据</div>
+            </template>
+
+            <!-- 今日龙虎榜 -->
+            <template v-else-if="c.live === 'lhb-today'">
+              <div v-if="lhbTop.length" class="qnt-rows">
+                <button
+                  v-for="row in lhbTop"
+                  :key="row.code"
+                  type="button"
+                  class="qnt-row"
+                  @dblclick="openKline(row.code, row.name)"
+                >
+                  <span class="qnt-id"><strong>{{ row.name }}</strong><em>{{ row.code }} · {{ row.trade_date }}</em></span>
+                  <span class="qnt-num" :class="pctClass(row.net_buy)">{{ formatAmount(row.net_buy) }}</span>
+                  <span class="qnt-num" :class="pctClass(row.change_pct)">{{ signedPct(row.change_pct) }}</span>
+                </button>
+              </div>
+              <div v-else-if="liveLoading" class="qnt-live-empty">正在加载龙虎榜…</div>
+              <div v-else class="qnt-live-empty">今日暂无龙虎榜数据</div>
+            </template>
+
+            <!-- 龙虎榜霸榜 -->
+            <template v-else-if="c.live === 'dominance'">
+              <div v-if="dominanceTop.length" class="qnt-rows">
+                <button
+                  v-for="row in dominanceTop"
+                  :key="row.code"
+                  type="button"
+                  class="qnt-row"
+                  @dblclick="openKline(row.code, row.name)"
+                >
+                  <span class="qnt-rank">{{ row.days_on_board }}日</span>
+                  <span class="qnt-id"><strong>{{ row.name }}</strong><em>{{ row.code }}</em></span>
+                  <span class="qnt-num" :class="pctClass(row.net_buy)">{{ formatAmount(row.net_buy) }}</span>
+                  <span class="qnt-num muted">{{ row.last_date }}</span>
+                </button>
+              </div>
+              <div v-else-if="liveLoading" class="qnt-live-empty">正在统计近10日霸榜…</div>
+              <div v-else class="qnt-live-empty">近10日暂无重复上榜个股</div>
+              <div v-if="dominanceMeta" class="qnt-live-meta">近 {{ dominanceMeta.days }} 日共 {{ dominanceMeta.count }} 只上榜，双击个股进入 K 线</div>
+            </template>
+
+            <!-- 游资动向 -->
+            <template v-else-if="c.live === 'hotmoney'">
+              <div v-if="hotMoneyFeatured.length" class="qnt-rows">
+                <button
+                  v-for="h in hotMoneyFeatured"
+                  :key="h.id"
+                  type="button"
+                  class="qnt-row"
+                  :class="{ 'qnt-row-active': hotMoneyTrader?.id === h.id }"
+                  @click="loadHotMoneyTrades(h)"
+                >
+                  <span class="qnt-id"><strong>{{ h.name }}</strong><em>{{ h.seat }}</em></span>
+                  <span class="qnt-num muted">{{ h.tier ?? 'A' }} 级</span>
+                </button>
+              </div>
+              <div v-else-if="liveLoading" class="qnt-live-empty">正在加载游资名录…</div>
+              <div v-else class="qnt-live-empty">暂无游资名录数据</div>
+              <div v-if="hotMoneyBusy" class="qnt-live-empty">正在加载 {{ hotMoneyTrader?.name }} 近期交易…</div>
+              <div v-else-if="hotMoneyTrader && hotMoneyTrades.length" class="qnt-rows qnt-sub">
+                <button
+                  v-for="(t, i) in hotMoneyTrades.slice(0, 4)"
+                  :key="t.code + i"
+                  type="button"
+                  class="qnt-row"
+                  @dblclick="openKline(t.code, t.name)"
+                >
+                  <span class="qnt-id"><strong>{{ t.name }}</strong><em>{{ t.trade_date }} · {{ t.side === 'buy' ? '买入' : '卖出' }}</em></span>
+                  <span class="qnt-num" :class="t.side === 'buy' ? 'up' : 'down'">{{ formatAmount(t.net_amount) }}</span>
+                </button>
+              </div>
+              <div v-else-if="hotMoneyTrader" class="qnt-live-empty">近7日暂无该游资席位交易记录</div>
+            </template>
+
+            <!-- 技术 K 线找股 -->
+            <template v-else-if="c.live === 'tech-search'">
+              <div class="qnt-search">
+                <input
+                  v-model="searchQuery"
+                  type="text"
+                  placeholder="输入代码 / 名称 / 拼音，回车或点选进入 K 线复盘"
+                  @input="onSearchInput"
+                  @keydown.enter="doSearch"
+                />
+                <span v-if="searchBusy" class="qnt-live-meta">搜索中…</span>
+              </div>
+              <div v-if="searchResults.length" class="qnt-rows qnt-sub">
+                <button
+                  v-for="s in searchResults"
+                  :key="s.code"
+                  type="button"
+                  class="qnt-row"
+                  @click="pickSearch(s)"
+                >
+                  <span class="qnt-id"><strong>{{ s.name }}</strong><em>{{ s.code }} · {{ s.market ?? '' }}</em></span>
+                  <span class="qnt-num muted">进入 K 线 →</span>
+                </button>
+              </div>
+              <div v-else-if="!searchQuery" class="qnt-live-empty">输入股票后进入 K 线复盘查看蜡烛形态与技术指标</div>
+            </template>
+
+            <div v-if="liveError" class="qnt-live-error">{{ liveError }}</div>
+          </div>
+
+          <table v-if="c.cols && !c.live" class="qnt-table">
             <thead>
               <tr>
                 <th v-for="col in c.cols" :key="col">{{ col }}</th>
@@ -808,7 +1257,7 @@ function go(to: string) {
             </tbody>
           </table>
 
-          <div v-else class="qnt-status">
+          <div v-else-if="!c.live" class="qnt-status">
             <span
               class="qnt-dot"
               :class="{
@@ -1196,6 +1645,244 @@ function go(to: string) {
 
   .qnt-quick-links {
     justify-content: flex-start;
+  }
+}
+/* ---------- 内部数据拉通：真实数据卡片 ---------- */
+.qnt-live {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+  min-width: 0;
+}
+
+.qnt-live-empty,
+.qnt-live-error {
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+  line-height: 1.6;
+  padding: 8px 0;
+}
+
+.qnt-live-error {
+  color: var(--color-up);
+}
+
+.qnt-live-meta {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+
+.qnt-summary {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 18%, var(--color-border));
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.qnt-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.qnt-metrics-2 {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+
+.qnt-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--color-bg) 55%, transparent);
+}
+
+.qnt-metric span {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+
+.qnt-metric strong {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.qnt-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.qnt-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 3px 9px;
+  color: var(--color-text-muted);
+  background: var(--color-bg);
+  white-space: nowrap;
+}
+
+.qnt-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.qnt-sub {
+  border-top: 1px dashed var(--color-border);
+  padding-top: 6px;
+}
+
+.qnt-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 12.5px;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.qnt-row:hover {
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
+.qnt-row-active {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+.qnt-rank {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  justify-self: start;
+}
+
+.qnt-id {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.qnt-id strong {
+  font-size: 12.5px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qnt-id em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--color-accent);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qnt-num {
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  justify-self: end;
+  white-space: nowrap;
+}
+
+.qnt-num.muted {
+  color: var(--color-text-muted);
+  font-size: 11.5px;
+}
+
+.qnt-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.qnt-split-col {
+  min-width: 0;
+}
+
+.qnt-split-col h4 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.qnt-theme-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.qnt-theme-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.qnt-theme-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  margin-right: 2px;
+}
+
+.qnt-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.qnt-search input {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+}
+
+.qnt-search input:focus {
+  border-color: var(--color-accent);
+}
+
+.up {
+  color: var(--color-up);
+}
+
+.down {
+  color: var(--color-down);
+}
+
+@media (max-width: 640px) {
+  .qnt-split {
+    grid-template-columns: 1fr;
   }
 }
 </style>

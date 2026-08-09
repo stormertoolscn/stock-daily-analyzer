@@ -106,6 +106,22 @@ class LhbDailyResponse(BaseModel):
     source: str
 
 
+class LhbDominanceItem(BaseModel):
+    code: str
+    name: str = ""
+    count: int = 0
+    days_on_board: int = 0
+    net_buy: float = 0
+    last_date: str = ""
+
+
+class LhbDominanceResponse(BaseModel):
+    days: int
+    count: int
+    items: list[LhbDominanceItem] = []
+    source: str = "akshare"
+
+
 class LhbSeatItem(BaseModel):
     rank: int = 0
     seat_name: str

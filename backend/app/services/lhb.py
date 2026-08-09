@@ -401,6 +401,65 @@ def fetch_daily_lhb(trade_date: str | None = None, *, allow_mock: bool = True) -
         }
 
 
+def fetch_lhb_dominance(days: int = 10) -> dict[str, Any]:
+    """近 N 个自然日龙虎榜霸榜聚合（单次区间查询，避免逐日慢请求）。"""
+    days = max(2, min(int(days), 30))
+    end = date.today()
+    start = end - timedelta(days=days - 1)
+    try:
+        import akshare as ak
+
+        df = ak.stock_lhb_detail_em(
+            start_date=start.strftime("%Y%m%d"),
+            end_date=end.strftime("%Y%m%d"),
+        )
+    except Exception:
+        return {"days": days, "count": 0, "items": [], "source": "error"}
+    if df is None or df.empty:
+        return {"days": days, "count": 0, "items": [], "source": "akshare"}
+
+    stats: dict[str, dict[str, Any]] = {}
+    for _, row in df.iterrows():
+        code = str(row.get("代码", "")).zfill(6)
+        if not code.isdigit():
+            continue
+        name = str(row.get("名称", "") or code)
+        day = _to_iso(row.get("上榜日"))
+        net = _safe_float(row.get("龙虎榜净买额"))
+        stat = stats.setdefault(
+            code,
+            {
+                "code": code,
+                "name": name,
+                "dates": set(),
+                "count": 0,
+                "net_buy": 0.0,
+                "last_date": "",
+            },
+        )
+        stat["dates"].add(day)
+        stat["count"] += 1
+        stat["net_buy"] += net
+        if day > stat["last_date"]:
+            stat["last_date"] = day
+
+    items: list[dict[str, Any]] = []
+    for stat in stats.values():
+        stat["days_on_board"] = len(stat["dates"])
+        stat.pop("dates", None)
+        items.append(stat)
+    items.sort(
+        key=lambda x: (x.get("days_on_board") or 0, abs(x.get("net_buy") or 0)),
+        reverse=True,
+    )
+    return {
+        "days": days,
+        "count": len(items),
+        "items": items[:50],
+        "source": "akshare",
+    }
+
+
 def _parse_seat_row(row: Any, side: SeatSide) -> dict[str, Any]:
     seat_name = str(row.get("交易营业部名称", "") or "未知席位")
     buy_amount = _safe_float(row.get("买入金额"))

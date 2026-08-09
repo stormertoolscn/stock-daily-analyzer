@@ -4,10 +4,11 @@ from app.models.schemas import (
     HotMoneyListResponse,
     HotMoneyTradesResponse,
     LhbDailyResponse,
+    LhbDominanceResponse,
     LhbSeatDetailResponse,
 )
 from app.services.hotmoney import fetch_hot_money_trades, list_hot_money
-from app.services.lhb import fetch_daily_lhb, fetch_stock_seats
+from app.services.lhb import fetch_daily_lhb, fetch_lhb_dominance, fetch_stock_seats
 
 router = APIRouter(prefix="/api/lhb", tags=["lhb"])
 
@@ -29,6 +30,15 @@ def get_daily_lhb(
     return LhbDailyResponse(**payload)
 
 
+@router.get("/dominance", response_model=LhbDominanceResponse)
+def get_lhb_dominance(
+    days: int = Query(10, ge=2, le=30, description="回溯自然日天数（2-30）"),
+) -> LhbDominanceResponse:
+    """近 N 日龙虎榜霸榜：上榜次数 / 天数 / 累计净买额（单次区间查询）。"""
+    payload = fetch_lhb_dominance(days)
+    return LhbDominanceResponse(**payload)
+
+
 @router.get("/hotmoney", response_model=HotMoneyListResponse)
 def get_hot_money_list(
     q: str | None = Query(None, description="搜索游资名 / 别名 / 席位关键词"),
@@ -40,13 +50,28 @@ def get_hot_money_list(
 @router.get("/hotmoney/{hm_id}/trades", response_model=HotMoneyTradesResponse)
 def get_hot_money_trades(
     hm_id: str,
-    days: int = Query(7, ge=1, le=30, description="回溯自然日天数"),
+    days: int = Query(7, ge=1, le=365, description="回溯自然日天数（1–365）"),
+    start_date: str | None = Query(
+        None,
+        description="起始日 YYYY-MM-DD；与 end_date 同时提供时优先按区间查询",
+    ),
+    end_date: str | None = Query(
+        None,
+        description="结束日 YYYY-MM-DD；与 start_date 同时提供时优先按区间查询",
+    ),
 ) -> HotMoneyTradesResponse:
     """按游资席位关键词追踪近期龙虎榜交易。"""
     try:
-        payload = fetch_hot_money_trades(hm_id, days=days)
+        payload = fetch_hot_money_trades(
+            hm_id,
+            days=days,
+            start_date=start_date,
+            end_date=end_date,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"游资交易获取失败: {exc}") from exc
     return HotMoneyTradesResponse(**payload)

@@ -103,6 +103,31 @@ export async function fetchLhbDaily(
   return (await res.json()) as LhbDailyResponse;
 }
 
+export interface LhbDominanceItem {
+  code: string;
+  name: string;
+  count: number;
+  days_on_board: number;
+  net_buy: number;
+  last_date: string;
+}
+
+export interface LhbDominanceResponse {
+  days: number;
+  count: number;
+  items: LhbDominanceItem[];
+  source: string;
+}
+
+export async function fetchLhbDominance(
+  days = 10,
+  signal?: AbortSignal,
+): Promise<LhbDominanceResponse> {
+  const params = new URLSearchParams({ days: String(days) });
+  const res = await fetch(`/api/lhb/dominance?${params}`, { signal });
+  if (!res.ok) throw new ApiError(res.status, await readError(res));
+  return (await res.json()) as LhbDominanceResponse;
+}
 export async function fetchLhbSeats(
   code: string,
   opts?: { tradeDate?: string | null; name?: string | null; signal?: AbortSignal },
@@ -167,10 +192,20 @@ export async function fetchHotMoneyList(
 
 export async function fetchHotMoneyTrades(
   id: string,
-  days = 7,
+  opts: {
+    days?: number;
+    startDate?: string | null;
+    endDate?: string | null;
+  } = {},
   signal?: AbortSignal,
 ): Promise<HotMoneyTradesResponse> {
-  const params = new URLSearchParams({ days: String(days) });
+  const params = new URLSearchParams();
+  if (opts.startDate && opts.endDate) {
+    params.set("start_date", opts.startDate);
+    params.set("end_date", opts.endDate);
+  } else {
+    params.set("days", String(opts.days ?? 7));
+  }
   const res = await fetch(
     `/api/lhb/hotmoney/${encodeURIComponent(id)}/trades?${params}`,
     { signal },
