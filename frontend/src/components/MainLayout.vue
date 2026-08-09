@@ -25,6 +25,7 @@ const navItems = [
   { path: "/capital-flow", label: "资金复盘" },
   { path: "/quant", label: "数据量化" },
   { path: "/research", label: "重点研究" },
+  { path: "/backtest", label: "策略回测" },
 ];
 const themeOptions: { value: ThemeMode; label: string }[] = [
   { value: "light", label: "浅色" },
@@ -45,6 +46,7 @@ const isLhbV3 = computed(() => route.path === "/lhb-v3");
 const isResearch = computed(() => route.path === "/research");
 const isCapitalFlow = computed(() => route.path === "/capital-flow");
 const isKline = computed(() => route.path === "/kline");
+const isBacktest = computed(() => route.path === "/backtest");
 const isQuant = computed(() => route.path === "/quant");
 const flushMain = computed(
   () =>
@@ -52,7 +54,8 @@ const flushMain = computed(
     isResearch.value ||
     isCapitalFlow.value ||
     isKline.value ||
-    isQuant.value,
+    isQuant.value ||
+    isBacktest.value,
 );
 
 /** 钉子锁定后占位下沉；未锁定则为顶部浮动覆盖 */

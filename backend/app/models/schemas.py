@@ -274,3 +274,71 @@ class FundFlowReviewResponse(BaseModel):
     source: str = ""
     updated_at: str = ""
     market: Optional[dict] = None
+
+
+class BacktestParams(BaseModel):
+    ma_short: int = Field(20, description="短均线周期")
+    ma_long: int = Field(60, description="长均线周期")
+    take_profit_pct: float = Field(20, description="止盈百分比")
+    stop_loss_pct: float = Field(8, description="止损百分比")
+    initial_cash: float = Field(1000000, description="初始资金")
+    start_date: str = Field("", description="回测起始日 YYYY-MM-DD，空则全历史")
+
+
+class BacktestRunRequest(BaseModel):
+    strategy: str = Field("ma_cross", description="策略 id")
+    codes: str = Field("600519", description="逗号分隔股票代码")
+    params: BacktestParams = Field(default_factory=BacktestParams)
+
+
+class BacktestTrade(BaseModel):
+    date: str
+    code: str
+    name: str = ""
+    action: str
+    price: float = 0
+    shares: int = 0
+    amount: float = 0
+    pnl: float = 0
+    return_pct: float = 0
+    reason: str = ""
+
+
+class BacktestCurvePoint(BaseModel):
+    date: str
+    equity: float = 0
+    drawdown: float = 0
+
+
+class BacktestPerStock(BaseModel):
+    code: str
+    name: str = ""
+    total_return: float = 0
+    max_drawdown: float = 0
+    trade_count: int = 0
+    win_rate: float = 0
+
+
+class BacktestRunResponse(BaseModel):
+    ok: bool = True
+    error: str = ""
+    strategy: str = ""
+    strategy_name: str = ""
+    stats: dict = {}
+    equity_curve: list[BacktestCurvePoint] = []
+    benchmark_curve: list[BacktestCurvePoint] = []
+    drawdown_curve: list[BacktestCurvePoint] = []
+    trades: list[BacktestTrade] = []
+    per_stock: list[BacktestPerStock] = []
+    errors: list[str] = []
+    codes: list[str] = []
+
+
+class BacktestSignalItem(BaseModel):
+    code: str
+    name: str = ""
+    signal: str = "观望"
+    date: str = ""
+    close: float = 0
+    detail: str = ""
+    strategy: str = ""
