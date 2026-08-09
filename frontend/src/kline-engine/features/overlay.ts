@@ -1,32 +1,48 @@
 /**
- * 把 BarFeatureTags 转成 ECharts candlestick itemStyle / markPoint / 叠加矩形。
+ * 通达信主图 STICKLINE 涨停/破板绘制（严格对照公式）。
  *
- * 涨停/倍量涨停配色对照通达信常见公式色：
- * - 涨停体 COLOR6910A3，底部黄头
- * - 倍量涨停：紫体 + 亮黄粗边框 + 黄头（截图中黄框紫柱）
+ * 倍量涨停: 先黄体宽3，再紫体宽1.8（两侧露黄）
+ * 涨停紫: 与 MACD 幅图获利洋红同色 #e040fb，宽1.8
+ * 底尖: MA5上行黄 / 下行橙，O→O+(C-O)*0.25 宽0.8 再 *0.2 宽0.3
+ * 顶尖: 仅涨停3，C→C-(C-O)*0.2 宽0.3 COLORFF8800（黄框内黑心视觉）
+ * 破板: 普通阴/阳线 + 顶部空心绿框内嵌实心黑块（黑心须可见）
+ * 开板: 底部空心绿框内嵌实心黑块
  */
 import type { KlineBar } from "../types";
 import type { BarFeatureTags } from "./detect";
+import { MACD_MAGENTA } from "../macdVisual";
 
-/** 通达信公式色（勿用主题涨跌红绿替代板标记） */
+/** 通达信公式色 */
 export const FEATURE_COLORS = {
-  /** COLOR6910A3 涨停紫 */
-  limitUp: "#6910A3",
-  /** 跌停深绿 */
+  /** 涨停紫：对齐 MACD 幅图洋红 */
+  limitUp: MACD_MAGENTA,
+  /** 跌停 COLOR296406 */
   limitDown: "#296406",
-  /** 倍量涨停实体仍用紫 */
-  volLimitUp: "#6910A3",
-  /** 倍量涨停亮黄外框 COLORFFFF00 */
-  volLimitUpBorder: "#FFFF00",
-  /** 黄头 STICKLINE */
-  limitTip: "#FFFF00",
-  /** 破板绿 */
+  volLimitUp: MACD_MAGENTA,
+  /** 倍量涨停黄体 COLORYELLOW */
+  volLimitUpYellow: "#FFFF00",
+  /** 底尖黄 COLORYELLOW */
+  tipYellow: "#FFFF00",
+  /** 底尖/顶尖橙 COLORFF8800 */
+  tipOrange: "#FF8800",
+  /** 破板 COLORGREEN */
   breakBox: "#00C000",
   yize: "#FF00FF",
-  pierce: "#FFFF00",
+  pierce: "#fe5000",
   alignBull: "#FF00FF",
   alignBear: "#00C000",
 } as const;
+
+/** 蜡烛类目占比（与 engine barWidth 68% 对齐） */
+const CANDLE_BAND = 0.68;
+/** 公式宽3 → 全蜡烛；紫宽1.8 → 1.8/3 */
+const YELLOW_BODY_RATIO = CANDLE_BAND;
+const PURPLE_BODY_RATIO = CANDLE_BAND * (1.8 / 3);
+/** 尖宽 0.8 / 0.3 相对公式宽3 */
+const TIP_WIDE_RATIO = CANDLE_BAND * (0.8 / 3);
+const TIP_THIN_RATIO = CANDLE_BAND * (0.3 / 3);
+/** 破板空心框宽 1.38 / 3 */
+const BREAK_BOX_RATIO = CANDLE_BAND * (1.38 / 3);
 
 export interface FeaturePaintRect {
   date: string;
@@ -35,8 +51,15 @@ export interface FeaturePaintRect {
   fill: string;
   stroke: string;
   lineWidth: number;
-  /** 占格子带宽的比例（0~1），默认 0.7（与现有 70% 宽一致） */
   widthRatio?: number;
+  /**
+   * body：实体柱/空心框
+   * tipSolid：实心尖（底端贴 y0 向上，或由 y0<y1 表示区间）
+   * tipHollow：顶端黄/橙框 + 内黑心（贴价位向下）
+   */
+  kind?: "body" | "tipSolid" | "tipHollow";
+  /** tipHollow/贴顶尖：true=贴 y0 向下画固定像素高 */
+  tipFromTop?: boolean;
 }
 
 export interface FeatureOverlayResult {
@@ -71,6 +94,9 @@ export interface FeatureOverlayResult {
     symbolSize: number;
   }>;
   paintRects: FeaturePaintRect[];
+  limitUpFlags: boolean[];
+  volLimitUpFlags: boolean[];
+  breakUpFlags: boolean[];
 }
 
 function formatDate(ts: number): string {
@@ -86,6 +112,7 @@ function pushLabel(
   text: string,
   color: string,
   position: "top" | "bottom" = "top",
+  opts?: { symbol?: string; symbolSize?: number; fontSize?: number },
 ) {
   out.push({
     name: text,
@@ -96,65 +123,95 @@ function pushLabel(
       show: true,
       formatter: text,
       color,
-      fontSize: 11,
+      fontSize: opts?.fontSize ?? 11,
       fontWeight: "bold",
       position,
       distance: position === "top" ? 4 : 6,
     },
-    symbol: position === "top" ? "triangle" : "none",
-    symbolSize: position === "top" ? 8 : 0,
+    symbol: opts?.symbol ?? (position === "top" ? "triangle" : "none"),
+    symbolSize: opts?.symbolSize ?? (position === "top" ? 8 : 0),
   });
 }
 
-/** 实体底部黄头（通达信涨停/倍量涨停 STICKLINE） */
-function pushYellowTip(
+/** 涨停底尖色：MA5 上行黄，否则橙 */
+function tipColor(ma5Rising: boolean): string {
+  return ma5Rising ? FEATURE_COLORS.tipYellow : FEATURE_COLORS.tipOrange;
+}
+
+/**
+ * 涨停装饰（公式顺序）：
+ * 1) 底尖宽 0.8 高 25% + 宽 0.3 高 20%
+ * 2) 紫柱 OPEN-CLOSE 宽 1.8（倍量时下层已有黄体）
+ * 3) 涨停3 顶尖宽 0.3 高 20%（黄/橙框+黑心）
+ */
+function pushLimitUpDecor(
   paintRects: FeaturePaintRect[],
   date: string,
   bar: KlineBar,
-  ratio = 0.22,
+  opts: { limitUp20: boolean; ma5Rising: boolean },
 ) {
-  const span = bar.close - bar.open;
-  if (Math.abs(span) < 1e-8) return;
+  const o = bar.open;
+  const c = bar.close;
+  const body = c - o;
+  if (Math.abs(body) < 1e-8) return;
+
+  const tipCol = tipColor(opts.ma5Rising);
+
+  // 底尖：O → O+(C-O)*0.25 宽0.8
   paintRects.push({
     date,
-    y0: bar.open,
-    y1: bar.open + span * ratio,
-    fill: FEATURE_COLORS.limitTip,
-    stroke: FEATURE_COLORS.limitTip,
+    y0: o,
+    y1: o + body * 0.25,
+    fill: tipCol,
+    stroke: tipCol,
     lineWidth: 0,
+    widthRatio: TIP_WIDE_RATIO,
+    kind: "body",
   });
-}
-
-/** 紫色实体：宽度 = 蜡烛宽度的 2/3（蜡烛宽 68% → 带宽约 45.33%） */
-const PURPLE_BODY_WIDTH_RATIO = (68 / 100) * (2 / 3);
-
-/** 涨停/倍量涨停紫色实体（比 K 线本体窄 1/3） */
-function pushPurpleBody(
-  paintRects: FeaturePaintRect[],
-  date: string,
-  bar: KlineBar,
-) {
-  const y0 = Math.min(bar.open, bar.close);
-  const y1 = Math.max(bar.open, bar.close);
-  if (Math.abs(y1 - y0) < 1e-8) return; // 一字板无实体，跳过
+  // 底尖：O → O+(C-O)*0.2 宽0.3
   paintRects.push({
     date,
-    y0,
-    y1,
+    y0: o,
+    y1: o + body * 0.2,
+    fill: tipCol,
+    stroke: tipCol,
+    lineWidth: 0,
+    widthRatio: TIP_THIN_RATIO,
+    kind: "body",
+  });
+
+  // 紫柱 OPEN-CLOSE 宽 1.8
+  paintRects.push({
+    date,
+    y0: Math.min(o, c),
+    y1: Math.max(o, c),
     fill: FEATURE_COLORS.limitUp,
     stroke: FEATURE_COLORS.limitUp,
     lineWidth: 0,
-    widthRatio: PURPLE_BODY_WIDTH_RATIO,
+    widthRatio: PURPLE_BODY_RATIO,
+    kind: "body",
   });
+
+  // 涨停3 顶尖：C → C-(C-O)*0.2 宽0.3，黄框黑心
+  if (opts.limitUp20) {
+    paintRects.push({
+      date,
+      y0: c,
+      y1: c,
+      fill: "none",
+      stroke: FEATURE_COLORS.tipOrange,
+      lineWidth: 1.5,
+      widthRatio: TIP_THIN_RATIO,
+      kind: "tipHollow",
+      tipFromTop: true,
+    });
+  }
 }
 
 export interface BuildFeatureOverlayOptions {
-  /**
-   * 是否展示日线级涨跌停/破板类标注与着色。
-   * 周 K、月 K 及以上应设为 false，避免把日线概念套到更高周期。
-   * 默认 true。
-   */
   includeDailyLimitHints?: boolean;
+  pierceLineCount?: number;
+  limitRatio?: number;
 }
 
 export function buildFeatureOverlay(
@@ -164,9 +221,13 @@ export function buildFeatureOverlay(
   options?: BuildFeatureOverlayOptions,
 ): FeatureOverlayResult {
   const includeDaily = options?.includeDailyLimitHints !== false;
+  const pierceLineCount = options?.pierceLineCount;
   const candleData: FeatureOverlayResult["candleData"] = [];
   const markPointData: FeatureOverlayResult["markPointData"] = [];
   const paintRects: FeaturePaintRect[] = [];
+  const limitUpFlags: boolean[] = new Array(bars.length).fill(false);
+  const volLimitUpFlags: boolean[] = new Array(bars.length).fill(false);
+  const breakUpFlags: boolean[] = new Array(bars.length).fill(false);
   const last = bars.length - 1;
 
   for (let i = 0; i < bars.length; i += 1) {
@@ -184,41 +245,53 @@ export function buildFeatureOverlay(
     const body = Math.max(bodyHi - bodyLo, (bar.high - bar.low) * 0.05);
 
     if (includeDaily && t.volLimitUp) {
-      // 倍量涨停：紫体 + 亮黄粗框（对照通达信截图黄框紫柱）
+      // 倍量涨停：黄体宽3 + 紫 1.8 + 尖
+      limitUpFlags[i] = true;
+      volLimitUpFlags[i] = true;
       candleData.push({
         value: ohlc,
         itemStyle: {
-          color: "rgba(0,0,0,0)",
-          color0: "rgba(0,0,0,0)",
-          borderColor: FEATURE_COLORS.volLimitUpBorder,
-          borderColor0: FEATURE_COLORS.volLimitUpBorder,
-          borderWidth: 3,
+          color: FEATURE_COLORS.volLimitUpYellow,
+          color0: FEATURE_COLORS.volLimitUpYellow,
+          // 浅色背景下黄底配阳线红细边框，轮廓清晰
+          borderColor: _theme.upColor,
+          borderColor0: _theme.upColor,
+          borderWidth: 1.2,
         },
       });
-      pushPurpleBody(paintRects, date, bar);
-      pushYellowTip(paintRects, date, bar, 0.26);
-      pushLabel(
-        markPointData,
-        date,
-        bar.high,
-        "倍量涨停",
-        FEATURE_COLORS.volLimitUpBorder,
-      );
+      pushLimitUpDecor(paintRects, date, bar, {
+        limitUp20: t.limitUp20,
+        ma5Rising: t.ma5Rising,
+      });
+      const pct = t.limitUp20 ? "20%" : "10%";
+      pushLabel(markPointData, date, bar.high, pct, FEATURE_COLORS.tipYellow, "top", {
+        symbol: "none",
+        symbolSize: 0,
+        fontSize: 10,
+      });
     } else if (includeDaily && t.limitUp) {
-      // 涨停：紫色实心 + 底部黄头
+      // 普通涨停：保留红实体 + 紫 1.8 + 尖
+      limitUpFlags[i] = true;
       candleData.push({
         value: ohlc,
         itemStyle: {
-          color: "rgba(0,0,0,0)",
-          color0: "rgba(0,0,0,0)",
-          borderColor: FEATURE_COLORS.limitUp,
-          borderColor0: FEATURE_COLORS.limitUp,
-          borderWidth: 1,
+          color: _theme.upColor,
+          color0: _theme.upColor,
+          borderColor: _theme.upColor,
+          borderColor0: _theme.upColor,
+          borderWidth: 1.2,
         },
       });
-      pushPurpleBody(paintRects, date, bar);
-      pushYellowTip(paintRects, date, bar, 0.22);
-      pushLabel(markPointData, date, bar.high, "涨停", FEATURE_COLORS.limitUp);
+      pushLimitUpDecor(paintRects, date, bar, {
+        limitUp20: t.limitUp20,
+        ma5Rising: t.ma5Rising,
+      });
+      const pct = t.limitUp20 ? "20%" : "10%";
+      pushLabel(markPointData, date, bar.high, pct, FEATURE_COLORS.tipYellow, "top", {
+        symbol: "none",
+        symbolSize: 0,
+        fontSize: 10,
+      });
     } else if (includeDaily && t.limitDown) {
       candleData.push({
         value: ohlc,
@@ -232,38 +305,39 @@ export function buildFeatureOverlay(
       });
       pushLabel(markPointData, date, bar.low, "跌停", FEATURE_COLORS.limitDown, "bottom");
     } else {
+      // 破板等：普通阴/阳线，不整柱涂色
       candleData.push(ohlc);
     }
 
     if (includeDaily && t.breakUp) {
-      const tip = Math.max(
-        (bar.high - bar.low) * 0.08,
-        body * 0.14,
-        Math.abs(bar.close - bar.open) * 0.12 || body * 0.1,
-      );
+      // 顶部小方块：空心绿框 + 内嵌实心黑块（须盖住红/绿实体）
+      breakUpFlags[i] = true;
+      const tipHi = Math.max(bar.close, bar.open);
       paintRects.push({
         date,
-        y0: bodyHi - tip,
-        y1: bodyHi,
-        fill: "rgba(0,0,0,0)",
+        y0: tipHi,
+        y1: tipHi,
+        fill: "none",
         stroke: FEATURE_COLORS.breakBox,
-        lineWidth: 1.25,
+        lineWidth: 1.35,
+        widthRatio: BREAK_BOX_RATIO,
+        kind: "tipHollow",
+        tipFromTop: true,
       });
       pushLabel(markPointData, date, bar.high, "破板", FEATURE_COLORS.breakBox);
     }
     if (includeDaily && t.breakDown) {
-      const tip = Math.max(
-        (bar.high - bar.low) * 0.08,
-        body * 0.14,
-        Math.abs(bar.close - bar.open) * 0.12 || body * 0.1,
-      );
+      // 底部小方块：空心绿框 + 内嵌实心黑块
       paintRects.push({
         date,
         y0: bodyLo,
-        y1: bodyLo + tip,
-        fill: "rgba(0,0,0,0)",
+        y1: bodyLo,
+        fill: "none",
         stroke: FEATURE_COLORS.breakBox,
-        lineWidth: 1.25,
+        lineWidth: 1.35,
+        widthRatio: BREAK_BOX_RATIO,
+        kind: "tipHollow",
+        tipFromTop: false,
       });
       pushLabel(markPointData, date, bar.low, "开板", FEATURE_COLORS.breakBox, "bottom");
     }
@@ -272,15 +346,29 @@ export function buildFeatureOverlay(
       pushLabel(markPointData, date, bar.high * 1.008, "壹泽洗", FEATURE_COLORS.yize);
     }
 
-    if (includeDaily && t.pierceOpen) {
-      const n = Math.max(6, t.pierceCount);
-      pushLabel(
-        markPointData,
-        date,
-        bar.high * 1.015,
-        `阳${n}线开`,
-        FEATURE_COLORS.pierce,
-      );
+    if (includeDaily && t.yangPierce) {
+      const n = t.pierceTarget || pierceLineCount || t.pierceCount;
+      if (n > 0) {
+        pushLabel(
+          markPointData,
+          date,
+          bar.high * 1.012,
+          `一阳穿${n}线`,
+          FEATURE_COLORS.pierce,
+        );
+      }
+    } else if (includeDaily && t.yinPierce) {
+      const n = t.pierceTarget || pierceLineCount || t.pierceCount;
+      if (n > 0) {
+        pushLabel(
+          markPointData,
+          date,
+          bar.low,
+          `一阴穿${n}线`,
+          FEATURE_COLORS.pierce,
+          "bottom",
+        );
+      }
     }
 
     if (i === last) {
@@ -292,5 +380,20 @@ export function buildFeatureOverlay(
     }
   }
 
-  return { candleData, markPointData, paintRects };
+  return {
+    candleData,
+    markPointData,
+    paintRects,
+    limitUpFlags,
+    volLimitUpFlags,
+    breakUpFlags,
+  };
 }
+
+// 供 volume / 外部引用宽度常量
+export const LIMIT_STICK_WIDTHS = {
+  yellowBody: YELLOW_BODY_RATIO,
+  purpleBody: PURPLE_BODY_RATIO,
+  tipWide: TIP_WIDE_RATIO,
+  tipThin: TIP_THIN_RATIO,
+} as const;

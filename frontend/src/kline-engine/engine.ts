@@ -23,6 +23,7 @@ import type {
   KlineBar,
   KlineQuoteSnapshot,
   KlineRenderConfig,
+  KlineTheme,
   PatternMatch,
   PatternRule,
 } from "./types";
@@ -314,7 +315,7 @@ export function createKlineEngine(
       return {
         silent: true,
         itemStyle: {
-          color: "rgba(245, 34, 45, 0.10)",
+          color: "rgba(209, 52, 56, 0.10)",
         },
         data: [[{ xAxis: times[a] }, { xAxis: times[b] }]],
       };
@@ -327,36 +328,18 @@ export function createKlineEngine(
         link: [{ xAxisIndex: "all" }],
         label: {
           backgroundColor: theme.axisPointerBg,
-          color: "#fff",
+          color: theme.axisPointerLabelColor,
           borderRadius: 2,
           padding: [3, 6],
           fontSize: 11,
         },
         lineStyle: { color: "#9aa3af", width: 1, type: "dashed" },
       },
-      tooltip: {
-        show: true,
-        trigger: "axis",
-        triggerOn: "mousemove|click",
-        formatter: () => "",
-        backgroundColor: "transparent",
-        borderWidth: 0,
-        padding: 0,
-        textStyle: { fontSize: 0, color: "transparent" },
-        extraCssText: "width:0;height:0;overflow:hidden;pointer-events:none;",
-        axisPointer: {
-          type: "line",
-          snap: true,
-          animation: false,
-          lineStyle: {
-            color: "#9aa3af",
-            width: 1,
-            type: "dashed",
-          },
-          label: { show: false },
-          link: [{ xAxisIndex: "all" }],
-        },
-      },
+      tooltip: buildCrosshairTooltip(view, {
+        mode: "intraday",
+        priceDigits: 2,
+        theme,
+      }),
       grid: [
         { left: 12, right: 56, top: 28, height: "62%" },
         { left: 12, right: 56, top: "74%", height: "18%" },
@@ -562,7 +545,7 @@ export function createKlineEngine(
           start: 0,
           end: 100,
           zoomOnMouseWheel: true,
-          moveOnMouseMove: true,
+          moveOnMouseMove: "shift",
         },
       ],
     } as EChartsOption;
@@ -584,23 +567,28 @@ export function createKlineEngine(
     const dates = bars.map((bar) => formatDate(bar.timestamp));
     const { maSeries, volMaSeries, macdSeries } = computeSeries(bars, params);
 
-    const maPeriodsForFeatures = (params?.maLines ?? theme.maLines)
-      .filter((l) => l.period > 0)
-      .slice(0, 10)
-      .map((l) => l.period);
+    const enabledMaLines = (params?.maLines ?? theme.maLines)
+      .filter((l) => l.period > 0 && (l.width ?? 1) > 0)
+      .slice(0, 12);
+    const maPeriodsForFeatures = enabledMaLines.map((l) => l.period);
+    const pierceLineCount = maPeriodsForFeatures.length;
     const period = params?.klinePeriod ?? "day";
     // 周/月及以上：涨停/跌停/破板是日线概念，不套到更高周期；壹泽洗等形态仍保留
     const includeDailyLimitHints = period === "day" || period === "intraday";
-    const featureOverlay = showFeatures
+    const limitRatio = resolveLimitRatio(params?.stockCode, params?.stockName);
+    const featureTags = showFeatures
+      ? detectBarFeatures(bars, {
+          maPeriods: maPeriodsForFeatures,
+          pierceN: pierceLineCount,
+          limitRatio,
+        })
+      : null;
+    const featureOverlay = showFeatures && featureTags
       ? buildFeatureOverlay(
           bars,
-          detectBarFeatures(bars, {
-            maPeriods: maPeriodsForFeatures,
-            pierceN: 6,
-            limitRatio: resolveLimitRatio(params?.stockCode, params?.stockName),
-          }),
+          featureTags,
           { upColor: theme.upColor, downColor: theme.downColor },
-          { includeDailyLimitHints },
+          { includeDailyLimitHints, pierceLineCount, limitRatio },
         )
       : null;
 
@@ -619,7 +607,7 @@ export function createKlineEngine(
     const macdBarData = macdSeries.macd.map((v, i) => ({
       value: v,
       itemStyle: {
-        color: macdSeries.histColors[i] ?? (v >= 0 ? theme.upColor : "#00c2d4"),
+        color: macdSeries.histColors[i] ?? (v >= 0 ? theme.upColor : theme.downColor),
       },
     }));
 
@@ -675,9 +663,10 @@ export function createKlineEngine(
     ];
 
     // 用百分比柱宽：缩放时由 ECharts 自动变宽/变窄，避免 JS 每帧 setOption
-    const candleWidth: string | number = "68%";
-    const volWidth: string | number = "68%";
-    const macdWidth: string | number = "55%";
+    const candleWidth: string | number = "78%";
+    // 量柱与主图 K 线严格同宽、同步缩放，保持同一种风格
+    const volWidth: string | number = candleWidth;
+    const macdWidth: string | number = "62%";
 
     const lastBar = bars[bars.length - 1];
     const lastClose = lastBar?.close;
@@ -721,6 +710,12 @@ export function createKlineEngine(
       ? { silent: true, z: 0, data: gapMarkAreaData }
       : undefined;
 
+    const extraMarks = showFeatures ? (params?.extraMarkPoints ?? []) : [];
+    const markPointData = [
+      ...(featureOverlay?.markPointData ?? []),
+      ...extraMarks,
+    ];
+
     const candleSeries = {
       type: "candlestick" as const,
       id: "kline-candle",
@@ -728,10 +723,10 @@ export function createKlineEngine(
       xAxisIndex: 0,
       yAxisIndex: 0,
       data: candleData,
-      // 百分比宽度：缩放零成本自适应；barMaxWidth 限制拉得过宽
+      // 百分比宽度：略宽于旧版，贴近通达信实体视觉比重
       barWidth: candleWidth,
       barMinWidth: 1,
-      barMaxWidth: 22,
+      barMaxWidth: 28,
       large: bars.length > 500,
       largeThreshold: 500,
       animation: false,
@@ -742,15 +737,14 @@ export function createKlineEngine(
         borderColor0: theme.downBorderColor ?? theme.downColor,
         borderWidth: 1,
       },
-      markPoint:
-        featureOverlay && featureOverlay.markPointData.length
-          ? {
-              silent: true,
-              animation: false,
-              label: { show: true },
-              data: featureOverlay.markPointData,
-            }
-          : undefined,
+      markPoint: markPointData.length
+        ? {
+            silent: true,
+            animation: false,
+            label: { show: true },
+            data: markPointData,
+          }
+        : undefined,
       markLine:
         lastClose != null
           ? {
@@ -885,9 +879,70 @@ export function createKlineEngine(
               const p0 = api.coord([xIndex, y0]);
               const p1 = api.coord([xIndex, y1]);
               const size = api.size([1, 0]);
+              const band = size[0] as number;
               const ratio = rect.widthRatio ?? 0.7;
-              const half = Math.max(2.5, (size[0] as number) * ratio * 0.5);
-              const x = p0[0] - half;
+              const width = Math.max(1, band * ratio);
+              const x = p0[0] - width / 2;
+              const kind = rect.kind ?? "body";
+
+              // tipSolid=底端实心；tipHollow=空心描边 + 内嵌实心黑块（黑心必须盖住蜡烛色）
+              if (kind === "tipSolid" || kind === "tipHollow") {
+                const tipH = Math.max(3, Math.min(width * 0.95, 8));
+                // tipHollow: tipFromTop!==false 贴价位向下；false 贴价位向上（开板）
+                // tipSolid: 贴 y0 向上
+                let y: number;
+                if (kind === "tipSolid" || rect.tipFromTop === false) {
+                  y = p0[1] - tipH;
+                } else {
+                  y = p0[1];
+                }
+                if (kind === "tipSolid") {
+                  return {
+                    type: "rect" as const,
+                    shape: { x, y, width, height: tipH },
+                    style: {
+                      fill: rect.fill,
+                      stroke: rect.stroke,
+                      lineWidth: 0,
+                    },
+                  };
+                }
+                const pad = Math.max(1.2, Math.min(2.2, tipH * 0.3));
+                const innerW = Math.max(1, width - pad * 2);
+                const innerH = Math.max(1, tipH - pad * 2);
+                // 先铺黑心（盖住K线实体），再画空心描边，保证黑块可见
+                return {
+                  type: "group" as const,
+                  children: [
+                    {
+                      type: "rect" as const,
+                      shape: {
+                        x: x + pad,
+                        y: y + pad,
+                        width: innerW,
+                        height: innerH,
+                      },
+                      style: {
+                        fill: "#000000",
+                        stroke: "none",
+                        lineWidth: 0,
+                      },
+                      z2: 10,
+                    },
+                    {
+                      type: "rect" as const,
+                      shape: { x, y, width, height: tipH },
+                      style: {
+                        fill: "transparent",
+                        stroke: rect.stroke,
+                        lineWidth: Math.max(1.35, rect.lineWidth || 1.5),
+                      },
+                      z2: 11,
+                    },
+                  ],
+                };
+              }
+
               const y = Math.min(p0[1], p1[1]);
               const h = Math.max(2, Math.abs(p1[1] - p0[1]));
               const hollow =
@@ -897,7 +952,7 @@ export function createKlineEngine(
                 rect.fill === "none";
               return {
                 type: "rect" as const,
-                shape: { x, y, width: half * 2, height: h },
+                shape: { x, y, width, height: h },
                 style: {
                   fill: hollow ? "none" : rect.fill,
                   stroke: rect.stroke,
@@ -915,7 +970,11 @@ export function createKlineEngine(
     const volumePack = detectVolumeFeatures(bars);
     const volumeOverlays = buildVolumeOverlaySeries(bars, volumePack, {
       barWidth: volWidth,
+      upColor: theme.upColor,
       dates,
+      limitUpFlags: featureOverlay?.limitUpFlags,
+      volLimitUpFlags: featureOverlay?.volLimitUpFlags,
+      breakUpFlags: featureOverlay?.breakUpFlags,
     });
 
     const series = [
@@ -945,7 +1004,7 @@ export function createKlineEngine(
         data: volumeData,
         barWidth: volWidth,
         barMinWidth: 1,
-        barMaxWidth: 24,
+        barMaxWidth: 28,
         z: 1,
         barGap: "-100%",
       },
@@ -979,7 +1038,7 @@ export function createKlineEngine(
         data: macdBarData,
         barWidth: macdWidth,
         barMinWidth: 1,
-        barMaxWidth: 24,
+        barMaxWidth: 28,
         barGap: "-100%",
         z: 2,
       },
@@ -992,7 +1051,7 @@ export function createKlineEngine(
         stack: "macd-yellow",
         barWidth: macdWidth,
         barMinWidth: 1,
-        barMaxWidth: 24,
+        barMaxWidth: 28,
         barGap: "-100%",
         itemStyle: { color: "transparent", borderWidth: 0 },
         silent: true,
@@ -1008,7 +1067,7 @@ export function createKlineEngine(
         stack: "macd-yellow",
         barWidth: macdWidth,
         barMinWidth: 1,
-        barMaxWidth: 24,
+        barMaxWidth: 28,
         barGap: "-100%",
         itemStyle: { color: "#f5d76e" },
         z: 4,
@@ -1056,7 +1115,7 @@ export function createKlineEngine(
         link: [{ xAxisIndex: [0, 1, 2] }],
         label: {
           backgroundColor: theme.axisPointerBg,
-          color: "#fff",
+          color: theme.axisPointerLabelColor,
           borderRadius: 2,
           padding: [3, 6],
           fontSize: 11,
@@ -1067,30 +1126,11 @@ export function createKlineEngine(
           type: "dashed",
         },
       },
-      tooltip: {
-        show: true,
-        trigger: "axis",
-        triggerOn: "mousemove|click",
-        // 隐藏浮层，仅保留十字轴与交点圆点（同花顺竖线效果）
-        formatter: () => "",
-        backgroundColor: "transparent",
-        borderWidth: 0,
-        padding: 0,
-        textStyle: { fontSize: 0, color: "transparent" },
-        extraCssText: "width:0;height:0;overflow:hidden;pointer-events:none;",
-        axisPointer: {
-          type: "line",
-          snap: true,
-          animation: false,
-          lineStyle: {
-            color: "#9aa3af",
-            width: 1,
-            type: "dashed",
-          },
-          label: { show: false },
-          link: [{ xAxisIndex: [0, 1, 2] }],
-        },
-      },
+      tooltip: buildCrosshairTooltip(bars, {
+        mode: "candle",
+        priceDigits,
+        theme,
+      }),
       grid: grids,
       xAxis: [
         {
@@ -1182,7 +1222,7 @@ export function createKlineEngine(
             label: {
               show: true,
               backgroundColor: theme.axisPointerBg,
-              color: "#fff",
+              color: theme.axisPointerLabelColor,
               fontSize: 10,
               padding: [2, 4],
               formatter: (params: { value?: unknown }) => {
@@ -1236,7 +1276,9 @@ export function createKlineEngine(
           end: zoomEnd,
           filterMode: "filter",
           zoomOnMouseWheel: true,
-          moveOnMouseMove: true,
+          // 左键留给框选；Shift+拖动平移
+          moveOnMouseMove: "shift",
+          moveOnMouseWheel: false,
           minValueSpan: Math.min(8, Math.max(3, Math.floor(bars.length * 0.05))),
         },
       ],
@@ -1297,4 +1339,119 @@ function formatTime(timestamp: number): string {
 
 function formatDateTime(timestamp: number): string {
   return `${formatDate(timestamp)} ${formatTime(timestamp)}`;
+}
+
+/** MSN 风格：2026年7月2日 */
+function formatZhDate(timestamp: number): string {
+  const d = new Date(timestamp);
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+function formatZhDateTime(timestamp: number): string {
+  return `${formatZhDate(timestamp)} ${formatTime(timestamp)}`;
+}
+
+function tooltipDataIndex(params: unknown): number {
+  const list = Array.isArray(params) ? params : params ? [params] : [];
+  for (const p of list) {
+    const idx = (p as { dataIndex?: number })?.dataIndex;
+    if (typeof idx === "number" && idx >= 0) return idx;
+  }
+  return -1;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** 十字虚线悬停：圆角浮框展示开高低收 / 成交量 / 时间 */
+function buildCrosshairTooltip(
+  bars: KlineBar[],
+  opts: {
+    mode: ChartMode;
+    priceDigits: number;
+    theme: KlineTheme;
+    xAxisLink?: "all" | number[];
+  },
+): NonNullable<EChartsOption["tooltip"]> {
+  const { mode, priceDigits, theme } = opts;
+  const link =
+    opts.xAxisLink ?? (mode === "intraday" ? "all" : ([0, 1, 2] as number[]));
+  const muted = theme.tooltipText === "#ffffff" ? "rgba(255,255,255,0.72)" : "rgba(0,0,0,0.55)";
+
+  return {
+    show: true,
+    trigger: "axis",
+    triggerOn: "mousemove|click",
+    confine: true,
+    enterable: false,
+    backgroundColor: theme.tooltipBg,
+    borderWidth: 0,
+    borderRadius: 8,
+    padding: [10, 12],
+    textStyle: {
+      color: theme.tooltipText,
+      fontSize: 12,
+      lineHeight: 18,
+    },
+    extraCssText:
+      "border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,0.22);pointer-events:none;",
+    position: (point, _params, _dom, _rect, size) => {
+      const [x, y] = point as number[];
+      const boxW = size.contentSize[0];
+      const boxH = size.contentSize[1];
+      const viewW = size.viewSize[0];
+      const viewH = size.viewSize[1];
+      let left = x + 14;
+      let top = y - boxH / 2;
+      if (left + boxW > viewW - 8) left = x - boxW - 14;
+      if (left < 8) left = 8;
+      if (top < 8) top = 8;
+      if (top + boxH > viewH - 8) top = Math.max(8, viewH - boxH - 8);
+      return [left, top];
+    },
+    formatter: (params: unknown) => {
+      const idx = tooltipDataIndex(params);
+      const bar = idx >= 0 ? bars[idx] : undefined;
+      if (!bar) return "";
+      const dig = priceDigits;
+      const row = (label: string, value: string) =>
+        `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:18px;margin:0 0 3px">` +
+        `<span style="color:${muted};white-space:nowrap">${label}</span>` +
+        `<span style="font-variant-numeric:tabular-nums;white-space:nowrap">${escapeHtml(value)}</span>` +
+        `</div>`;
+      const timeLabel =
+        mode === "intraday"
+          ? formatZhDateTime(bar.timestamp)
+          : formatZhDate(bar.timestamp);
+      return (
+        `<div style="min-width:128px;max-width:200px">` +
+        row("开盘价", bar.open.toFixed(dig)) +
+        row("高", bar.high.toFixed(dig)) +
+        row("低", bar.low.toFixed(dig)) +
+        row("收盘价", bar.close.toFixed(dig)) +
+        row("成交量", formatVolume(bar.volume)) +
+        `<div style="margin-top:6px;color:${muted};font-size:11px">${escapeHtml(timeLabel)}</div>` +
+        `</div>`
+      );
+    },
+    axisPointer: {
+      type: "line",
+      snap: true,
+      animation: false,
+      lineStyle: {
+        color: "#9aa3af",
+        width: 1,
+        type: "dashed",
+      },
+      label: { show: false },
+      link: Array.isArray(link)
+        ? [{ xAxisIndex: link }]
+        : [{ xAxisIndex: "all" }],
+    },
+  };
 }

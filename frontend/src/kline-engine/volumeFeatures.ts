@@ -4,6 +4,7 @@
  * 已套用：
  * - DRAWBAND(MA10, MA135)
  * - 倍量 / 倍量阳绿阴红 / V1 黄柱 / V3 红段 / V4 绿段（收跌倍量）
+ * - 破板日量柱：红主体 + 底部左紫右黄对半
  * - B≥99 紫柱（AMOUNT 用 VOL×CLOSE 近似）
  * - 连续缩量上涨绿柱 HJ_37
  * - 阶段地量中段绿框
@@ -16,6 +17,7 @@
  */
 import type { KlineBar } from "./types";
 import { ema, sma } from "./indicators";
+import { MACD_MAGENTA } from "./macdVisual";
 
 export interface VolumeBarTag {
   beiLiang: boolean;
@@ -183,15 +185,16 @@ export const VOL_FEATURE_COLORS = {
   bandHigh: "rgba(161, 85, 161, 0.22)",
   bandLow: "rgba(255, 100, 100, 0.10)",
   beiLiangYellow: "#e6c200",
-  beiLiangRed: "#f5222d",
-  beiLiangGreen: "#00c853",
-  purpleB: "#6910A3",
-  shrinkGreen: "#16a34a",
-  stageLowStroke: "#009900",
-  stageLowFill: "#22c55e",
+  beiLiangRed: "#ff2438",
+  beiLiangGreen: "#107c10",
+  /** 与 MACD 获利洋红柱一致 */
+  purpleB: MACD_MAGENTA,
+  shrinkGreen: "#107c10",
+  stageLowStroke: "#107c10",
+  stageLowFill: "#107c10",
   hLine: "#e6c200",
   mvp5Steep: "#d946ef",
-  crossIcon: "#f5222d",
+  crossIcon: "#ff2438",
 } as const;
 
 type VolOverlayBar = {
@@ -203,15 +206,29 @@ type VolOverlayBar = {
 export function buildVolumeOverlaySeries(
   bars: KlineBar[],
   pack: VolumeFeaturePack,
-  opts: { barWidth: number | string; dates: string[] },
+  opts: {
+    barWidth: number | string;
+    dates: string[];
+    /** 阳线红：倍量涨停黄柱描边（与主图黄体边框同步） */
+    upColor: string;
+    /** 涨停日：叠半宽紫柱 */
+    limitUpFlags?: boolean[];
+    /** 巨量/倍量涨停：全宽黄底 + 半宽紫（与主图一致） */
+    volLimitUpFlags?: boolean[];
+    /** 破板日：若同时倍量，量柱同黄+紫 */
+    breakUpFlags?: boolean[];
+  },
 ): object[] {
   const n = bars.length;
   const barW = typeof opts.barWidth === "string" ? opts.barWidth : Math.max(1, opts.barWidth);
-  // 紫色量柱：宽度 = 蜡烛宽度的 2/3（蜡烛宽 68% → 带宽约 45.33%）
+  // 紫色量柱：对中，宽 = 公式紫柱 1.8/3 × 蜡烛宽 → 类目约 40.8%
   const purpleBarW =
-    typeof opts.barWidth === "string" ? "45.33%" : Math.max(1, opts.barWidth * (2 / 3));
+    typeof opts.barWidth === "string" ? "40.8%" : Math.max(1, opts.barWidth * (1.8 / 3));
   const dates = opts.dates;
   const vols = bars.map((b) => b.volume);
+  const limitUp = opts.limitUpFlags ?? [];
+  const volLimitUp = opts.volLimitUpFlags ?? [];
+  const breakUp = opts.breakUpFlags ?? [];
 
   const nulls = (): (number | null)[] => new Array(n).fill(null);
 
@@ -233,6 +250,8 @@ export function buildVolumeOverlaySeries(
   }
 
   const beiLiangFull: VolOverlayBar[] = bars.map((bar, i) => {
+    // 破板日量柱保持红主体，不整柱改色
+    if (breakUp[i]) return { value: null };
     const t = pack.tags[i];
     if (t.beiLiangYang) {
       return { value: bar.volume, itemStyle: { color: VOL_FEATURE_COLORS.beiLiangGreen } };
@@ -244,13 +263,27 @@ export function buildVolumeOverlaySeries(
   });
 
   const yellowBei: VolOverlayBar[] = bars.map((bar, i) =>
-    pack.tags[i].beiLiang
+    pack.tags[i].beiLiang && !breakUp[i]
       ? { value: bar.volume, itemStyle: { color: VOL_FEATURE_COLORS.beiLiangYellow } }
       : { value: null },
   );
 
+  // 巨量涨停量柱：全宽黄底 + 半宽居中紫（仅倍量涨停，不含破板日）
+  const volLimitYellow: VolOverlayBar[] = bars.map((bar, i) =>
+    volLimitUp[i]
+      ? {
+          value: bar.volume,
+          itemStyle: {
+            color: "#FFFF00",
+            borderColor: opts.upColor,
+            borderWidth: 1,
+          },
+        }
+      : { value: null },
+  );
+
   const purpleB: VolOverlayBar[] = bars.map((bar, i) =>
-    pack.tags[i].purpleB99
+    pack.tags[i].purpleB99 || limitUp[i] || volLimitUp[i]
       ? { value: bar.volume, itemStyle: { color: VOL_FEATURE_COLORS.purpleB } }
       : { value: null },
   );
@@ -278,6 +311,18 @@ export function buildVolumeOverlaySeries(
     if (t.stageLowVol && vol > 0) {
       stickSegs.push([i, vol * 0.3, vol * 0.6, 2]);
     }
+  }
+
+  // 破板日量柱：红主体保留；底部对半 — 左紫右黄（对照用户示意图）
+  // [index, y0, y1, side] side: 0=左紫 1=右黄
+  const breakFootSegs: number[][] = [];
+  for (let i = 0; i < n; i += 1) {
+    if (!breakUp[i]) continue;
+    const vol = vols[i];
+    if (!(vol > 0)) continue;
+    const foot = vol * 0.25;
+    breakFootSegs.push([i, 0, foot, 0]);
+    breakFootSegs.push([i, 0, foot, 1]);
   }
 
   const crossMarks = pack.mvp5Cross35
@@ -359,6 +404,18 @@ export function buildVolumeOverlaySeries(
     },
     {
       type: "bar",
+      id: "kline-vol-limit-yellow",
+      name: "巨量涨停黄",
+      xAxisIndex: 1,
+      yAxisIndex: 1,
+      data: volLimitYellow,
+      barWidth: barW,
+      barGap: "-100%",
+      z: 3,
+      silent: true,
+    },
+    {
+      type: "bar",
       id: "kline-vol-purple",
       name: "量比紫",
       xAxisIndex: 1,
@@ -432,6 +489,57 @@ export function buildVolumeOverlaySeries(
         };
       },
       data: stickSegs,
+    });
+  }
+
+  // 破板日量柱底足：左紫右黄对半（与红量柱同宽拼接）
+  if (breakFootSegs.length) {
+    series.push({
+      type: "custom",
+      name: "破板量足",
+      xAxisIndex: 1,
+      yAxisIndex: 1,
+      silent: true,
+      z: 5,
+      encode: { x: 0, y: [1, 2] },
+      renderItem: (
+        _params: { dataIndex: number },
+        api: {
+          value: (dim: number) => number;
+          coord: (val: [number, number]) => number[];
+          size: (val: [number, number]) => number[];
+        },
+      ) => {
+        const idx = api.value(0);
+        const y0 = api.value(1);
+        const y1 = api.value(2);
+        const side = api.value(3); // 0=左紫 1=右黄
+        const p0 = api.coord([idx, y0]);
+        const p1 = api.coord([idx, y1]);
+        const band = Math.max(2, (api.size([1, 0])[0] as number) || 4);
+        // 与量柱同宽 68%，各占一半
+        const fullW = Math.max(2, band * 0.68);
+        const halfW = fullW / 2;
+        const x =
+          side === 0 ? p0[0] - fullW / 2 : p0[0];
+        const color =
+          side === 0 ? VOL_FEATURE_COLORS.purpleB : "#FFFF00";
+        return {
+          type: "rect",
+          shape: {
+            x,
+            y: Math.min(p0[1], p1[1]),
+            width: halfW,
+            height: Math.max(1, Math.abs(p1[1] - p0[1])),
+          },
+          style: {
+            fill: color,
+            stroke: color,
+            lineWidth: 0,
+          },
+        };
+      },
+      data: breakFootSegs,
     });
   }
 
