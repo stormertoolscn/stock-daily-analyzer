@@ -84,15 +84,14 @@ if (Test-PortListening $BackendPort) {
   Write-Host "Backend already listening on $BackendPort" -ForegroundColor Yellow
 } else {
   Write-Step "Starting FastAPI on http://${BackendHost}:$BackendPort"
-  # 用 WorkingDirectory + python -m uvicorn，避免路径空格/uvicorn.exe 直接启动失败
+  # 后台隐藏启动（无窗口）：日志写入 backend/_uvicorn_boot.log
   $backendCmd = @"
-`$Host.UI.RawUI.WindowTitle = 'LHB Backend :$BackendPort'
 Set-Location -LiteralPath '$BackendDir'
-& '$VenvPython' -m uvicorn app.main:app --reload --host $BackendHost --port $BackendPort
-if (`$LASTEXITCODE -ne 0) { Write-Host 'Backend exited with code' `$LASTEXITCODE -ForegroundColor Red; pause }
+& '$VenvPython' -m uvicorn app.main:app --reload --host $BackendHost --port $BackendPort *> '$BackendDir\_uvicorn_boot.log'
+exit `$LASTEXITCODE
 "@
-  Start-Process -FilePath "powershell.exe" -WorkingDirectory $BackendDir -ArgumentList @(
-    "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $backendCmd
+  Start-Process -FilePath "powershell.exe" -WorkingDirectory $BackendDir -WindowStyle Hidden -ArgumentList @(
+    "-ExecutionPolicy", "Bypass", "-Command", $backendCmd
   ) | Out-Null
 }
 
@@ -100,33 +99,33 @@ if (Test-PortListening $FrontendPort) {
   Write-Host "Frontend already listening on $FrontendPort" -ForegroundColor Yellow
 } else {
   Write-Step "Starting Vite on http://${FrontendHost}:$FrontendPort"
+  # 后台隐藏启动（无窗口）：日志写入 frontend/_vite_boot.log
   $frontendCmd = @"
-`$Host.UI.RawUI.WindowTitle = 'LHB Frontend :$FrontendPort'
 Set-Location -LiteralPath '$FrontendDir'
-& npm run dev -- --host $FrontendHost --port $FrontendPort
-if (`$LASTEXITCODE -ne 0) { Write-Host 'Frontend exited with code' `$LASTEXITCODE -ForegroundColor Red; pause }
+& npm run dev -- --host $FrontendHost --port $FrontendPort *> '$FrontendDir\_vite_boot.log'
+exit `$LASTEXITCODE
 "@
-  Start-Process -FilePath "powershell.exe" -WorkingDirectory $FrontendDir -ArgumentList @(
-    "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $frontendCmd
+  Start-Process -FilePath "powershell.exe" -WorkingDirectory $FrontendDir -WindowStyle Hidden -ArgumentList @(
+    "-ExecutionPolicy", "Bypass", "-Command", $frontendCmd
   ) | Out-Null
 }
 
 Write-Step "Waiting for backend health..."
 if (-not (Wait-HttpOk "http://${BackendHost}:$BackendPort/api/health" 120)) {
-  Write-Warning "Backend health check timed out. Check the Backend window logs."
+  Write-Warning "Backend health check timed out. Check backend/_uvicorn_boot.log."
 } else {
   Write-Host "Backend OK" -ForegroundColor Green
 }
 
 Write-Step "Waiting for frontend..."
 if (-not (Wait-HttpOk "http://${FrontendHost}:$FrontendPort/" 120)) {
-  Write-Warning "Frontend did not respond in time. Check the Frontend window logs."
+  Write-Warning "Frontend did not respond in time. Check frontend/_vite_boot.log."
 } else {
   Write-Host "Frontend OK" -ForegroundColor Green
 }
 
 $HomeUrl = "http://${FrontendHost}:$FrontendPort/"
-$LhbUrl = "http://${FrontendHost}:$FrontendPort/lhb-v3?tab=hotmoney&hm=hlha"
+$LhbUrl = "http://${FrontendHost}:$FrontendPort/lhb-v3?tab=hotmoney&hm=zmz"
 
 Write-Host ""
 Write-Host "Ready:" -ForegroundColor Green
@@ -134,7 +133,7 @@ Write-Host "  Home:     $HomeUrl"
 Write-Host "  游资追踪: $LhbUrl"
 Write-Host "  API:      http://${BackendHost}:$BackendPort/api/health"
 Write-Host ""
-Write-Host "Tip: use ?tab=hotmoney&hm=hlha (not tab%3D... encoded as one blob)." -ForegroundColor DarkGray
+Write-Host "Tip: use ?tab=hotmoney&hm=zmz (not tab%3D... encoded as one blob)." -ForegroundColor DarkGray
 
 if (-not $NoBrowser) {
   Start-Process $LhbUrl

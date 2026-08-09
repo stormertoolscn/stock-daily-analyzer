@@ -1,4 +1,4 @@
 @echo off
-REM Windows 登录后自动启动本地前后端（无 pause，不弹浏览器）
+REM Start local frontend+backend after Windows login (hidden, no browser)
 cd /d "%~dp0"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Minimized -File "%~dp0start-dev.ps1" -NoBrowser
+powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "& '%~dp0start-hidden.ps1' -NoBrowser"

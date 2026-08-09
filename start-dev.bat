@@ -2,22 +2,8 @@
 setlocal
 cd /d "%~dp0"
 
-REM Double-click friendly launcher for local frontend + backend.
-REM Usage:
-REM   start-dev.bat
-REM   start-dev.bat -Restart
-REM   start-dev.bat -NoBrowser
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-dev.ps1" %*
-set ERR=%ERRORLEVEL%
-if %ERR% neq 0 (
-  echo.
-  echo start-dev.ps1 failed with exit code %ERR%.
-  pause
-  exit /b %ERR%
-)
-
-echo.
-echo Launcher finished. Backend/Frontend windows stay open for logs.
-pause
+REM Hidden launch of local frontend+backend (no console windows):
+REM   FastAPI(8001) + Vite(5173)
+REM Logs: backend/_uvicorn_boot.log, frontend/_vite_boot.log
+powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "& '%~dp0start-hidden.ps1' %*"
 endlocal

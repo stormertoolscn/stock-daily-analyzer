@@ -8,7 +8,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
 
 echo Ports cleared.
 if /I "%~1"=="restart" (
-  call "%~dp0start-dev.bat" -Restart -NoBrowser
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "& '%~dp0start-hidden.ps1' -Restart -NoBrowser"
 ) else (
   pause
 )
