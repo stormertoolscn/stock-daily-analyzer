@@ -222,7 +222,7 @@ def _load_from_akshare() -> list[StockMeta]:
 
 
 def get_stock_universe(*, force: bool = False) -> list[StockMeta]:
-    """全市场代码-名称表（带拼音），进程内缓存 24h。"""
+    """全市场代码-名称表（带拼音）：内存 24h + 磁盘持久化，重启不重拉。"""
     global _cache_rows, _cache_loaded_at
     now = time.time()
     with _lock:
@@ -232,7 +232,32 @@ def get_stock_universe(*, force: bool = False) -> list[StockMeta]:
             and now - _cache_loaded_at < _CACHE_TTL_SEC
         ):
             return _cache_rows
+
+        from app.services.cache import get_json, set_json
+
+        if not force:
+            disk = get_json("stockmeta:universe:v1")
+            if isinstance(disk, list) and disk:
+                try:
+                    rows = [StockMeta(**d) for d in disk]
+                    _cache_rows = rows
+                    _cache_loaded_at = now
+                    return rows
+                except Exception:
+                    pass
+
         rows = _load_from_akshare()
+        if rows:
+            try:
+                from dataclasses import asdict
+
+                set_json(
+                    "stockmeta:universe:v1",
+                    [asdict(r) for r in rows],
+                    float(_CACHE_TTL_SEC),
+                )
+            except Exception:
+                pass
         _cache_rows = rows
         _cache_loaded_at = now
         return rows

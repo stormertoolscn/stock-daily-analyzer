@@ -54,3 +54,11 @@ frontend/tsconfig.tsbuildinfo
 # Local dev boot logs
 backend/*.log
 backend/_uvicorn_boot.log.err
+
+# 运行时数据缓存与日志（本地保留，不进版本库）
+stock_data/
+backend/data_cache/
+backend/_uvicorn_boot.log
+backend/_uvicorn_boot.log.err
+frontend/_vite_boot.log
+frontend/_vite_boot.err

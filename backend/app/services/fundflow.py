@@ -321,6 +321,15 @@ def fetch_fund_flow_review(*, trade_date: str | None = None, force: bool = False
     if not force and cached is not None and now - cached[0] < _CACHE_TTL:
         return cached[1]
 
+    from app.services.cache import get_json, set_json
+
+    disk_key = f"fundflow:review:{target}"
+    if not force:
+        disk = get_json(disk_key)
+        if disk is not None:
+            _CACHE_BY_DATE[target] = (now, disk)
+            return disk
+
     try:
         if target == date.today().isoformat():
             payload = _load_today_review()
@@ -328,6 +337,10 @@ def fetch_fund_flow_review(*, trade_date: str | None = None, force: bool = False
             payload = _load_historical_review(target)
     except Exception:
         payload = _mock_review(target)
+
+    # 历史日期数据不可变 → 永久缓存；当日盘中数据 → 短 TTL
+    ttl = _CACHE_TTL if target == date.today().isoformat() else 0.0
+    set_json(disk_key, payload, ttl)
 
     _CACHE_BY_DATE[target] = (now, payload)
     if len(_CACHE_BY_DATE) > 20:

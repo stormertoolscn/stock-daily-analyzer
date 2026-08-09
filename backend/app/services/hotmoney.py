@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from app.services.lhb import _safe_float, _to_iso
@@ -241,21 +241,52 @@ def fetch_hot_money_trades(
     hm_id: str,
     *,
     days: int = 7,
+    start_date: str | date | None = None,
+    end_date: str | date | None = None,
     allow_mock: bool = True,
 ) -> dict[str, Any]:
     trader = get_hot_money(hm_id)
     if trader is None:
         raise LookupError(f"unknown hot money id: {hm_id}")
 
-    days = max(1, min(int(days), 30))
     keywords = list(trader.get("keywords") or [])
-    end = datetime.now().date()
-    start = end - timedelta(days=days + 5)  # 多取几天覆盖非交易日
-    start_s = start.strftime("%Y%m%d")
-    end_s = end.strftime("%Y%m%d")
+
+    def _parse_day(value: str | date | None) -> date | None:
+        if value is None:
+            return None
+        if isinstance(value, date):
+            return value
+        text = str(value).strip()[:10]
+        if not text:
+            return None
+        return date.fromisoformat(text)
+
+    start_d = _parse_day(start_date)
+    end_d = _parse_day(end_date)
+    if start_d and end_d:
+        if start_d > end_d:
+            start_d, end_d = end_d, start_d
+        days = max(1, (end_d - start_d).days + 1)
+        # 区间查询按所选日历日拉取，不再额外缓冲
+        start_s = start_d.strftime("%Y%m%d")
+        end_s = end_d.strftime("%Y%m%d")
+        end = end_d
+    else:
+        days = max(1, min(int(days), 365))
+        end = datetime.now().date()
+        start_d = end - timedelta(days=days + 5)  # 多取几天覆盖非交易日
+        start_s = start_d.strftime("%Y%m%d")
+        end_s = end.strftime("%Y%m%d")
 
     trades: list[dict[str, Any]] = []
     source = "mock"
+
+    from app.services.cache import get_json, set_json
+
+    disk_key = f"lhb:hm:{hm_id}:{start_s}:{end_s}"
+    disk = get_json(disk_key)
+    if disk is not None:
+        return disk
 
     try:
         import akshare as ak
@@ -325,12 +356,17 @@ def fetch_hot_money_trades(
 
     trades.sort(key=lambda x: (x.get("trade_date") or "", abs(x.get("net_amount") or 0)), reverse=True)
 
-    return {
+    payload = {
         "trader": trader,
         "days": days,
         "count": len(trades),
-        "items": trades[:200],
+        "items": trades[:800],
         "source": source,
         "range_start": _to_iso(start_s),
         "range_end": _to_iso(end_s),
     }
+    if source != "mock":
+        # 历史区间不可变 → 永久；含今日 → 短 TTL（盘中可能更新）
+        ttl = 90.0 if end.isoformat() >= date.today().isoformat() else 0.0
+        set_json(disk_key, payload, ttl)
+    return payload

@@ -1,6 +1,8 @@
+import json
+import time
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from app.models.schemas import (
     KlineResponse,
@@ -16,6 +18,10 @@ from app.services.research import build_research_report
 from app.services.stock_meta import lookup_name, search_stocks
 
 router = APIRouter(prefix="/api/stock", tags=["stock"])
+
+# K 线响应缓存：序列化 3642 根 bar 较慢，命中后直接返回 JSON 字符串（分时不缓存）
+_KLINE_RESP_CACHE: dict[str, tuple[float, str]] = {}
+_KLINE_RESP_TTL_SEC = 10 * 60
 
 
 def _fetch_from_akshare(code: str) -> StockBasicInfo | None:
@@ -119,6 +125,17 @@ def get_stock_research(code: str) -> StockResearchReport:
     raw = (code or "").strip()
     if not raw or len(raw) < 4:
         raise HTTPException(status_code=400, detail="invalid stock code")
+
+    from datetime import date
+
+    from app.services.cache import get_json, set_json
+
+    # 报告按交易日缓存：当日永久复用，次日自动换 key
+    disk_key = f"research:{raw}:{date.today().isoformat()}"
+    cached = get_json(disk_key)
+    if cached is not None:
+        return StockResearchReport(**cached)
+
     try:
         basic = get_stock_basic(raw)
         kline = fetch_kline(raw, ui_period="day", adjust="qfq")
@@ -133,6 +150,7 @@ def get_stock_research(code: str) -> StockResearchReport:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"研究数据生成失败: {exc}") from exc
+    set_json(disk_key, payload, 0.0)
     return StockResearchReport(**payload)
 
 
@@ -156,6 +174,13 @@ def get_stock_kline(
     if not code or len(code.strip()) < 4:
         raise HTTPException(status_code=400, detail="invalid stock code")
 
+    # 分时实时性要求高，不做响应缓存；日/周/月缓存序列化结果
+    cache_key = f"{code.strip()}:{period}:{adjust}:{trade_date or ''}"
+    if period != "intraday":
+        hit = _KLINE_RESP_CACHE.get(cache_key)
+        if hit is not None and time.time() - hit[0] < _KLINE_RESP_TTL_SEC:
+            return Response(content=hit[1], media_type="application/json")
+
     try:
         payload = fetch_kline(
             code.strip(),
@@ -174,4 +199,10 @@ def get_stock_kline(
     if not payload.get("name"):
         payload["name"] = lookup_name(payload["code"])
 
-    return KlineResponse(**payload)
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if period != "intraday":
+        _KLINE_RESP_CACHE[cache_key] = (time.time(), body)
+        if len(_KLINE_RESP_CACHE) > 300:
+            oldest = min(_KLINE_RESP_CACHE, key=lambda k: _KLINE_RESP_CACHE[k][0])
+            _KLINE_RESP_CACHE.pop(oldest, None)
+    return Response(content=body, media_type="application/json")

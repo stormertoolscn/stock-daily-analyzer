@@ -363,6 +363,13 @@ def fetch_daily_lhb(trade_date: str | None = None, *, allow_mock: bool = True) -
     ymd = _to_yyyymmdd(trade_date)
     iso = _to_iso(ymd)
 
+    from app.services.cache import get_json, set_json
+
+    disk_key = f"lhb:daily:{ymd}"
+    disk = get_json(disk_key)
+    if disk is not None:
+        return disk
+
     try:
         import akshare as ak
 
@@ -383,12 +390,16 @@ def fetch_daily_lhb(trade_date: str | None = None, *, allow_mock: bool = True) -
         items = _normalize_nan(items)
         # 同一股票可能因多个上榜原因重复，按净买额排序
         items.sort(key=lambda x: abs(x.get("net_buy") or 0), reverse=True)
-        return {
+        payload = {
             "trade_date": iso,
             "count": len(items),
             "items": items,
             "source": "akshare",
         }
+        # 历史交易日不可变 → 永久缓存；当日盘中 → 短 TTL
+        ttl = 90.0 if iso == date.today().isoformat() else 0.0
+        set_json(disk_key, payload, ttl)
+        return payload
     except Exception:
         if not allow_mock:
             raise
@@ -406,6 +417,14 @@ def fetch_lhb_dominance(days: int = 10) -> dict[str, Any]:
     days = max(2, min(int(days), 30))
     end = date.today()
     start = end - timedelta(days=days - 1)
+
+    from app.services.cache import get_json, set_json
+
+    disk_key = f"lhb:dominance:{end.isoformat()}:{days}"
+    disk = get_json(disk_key)
+    if disk is not None:
+        return disk
+
     try:
         import akshare as ak
 
@@ -452,12 +471,14 @@ def fetch_lhb_dominance(days: int = 10) -> dict[str, Any]:
         key=lambda x: (x.get("days_on_board") or 0, abs(x.get("net_buy") or 0)),
         reverse=True,
     )
-    return {
+    payload = {
         "days": days,
         "count": len(items),
         "items": items[:50],
         "source": "akshare",
     }
+    set_json(disk_key, payload, 300.0)
+    return payload
 
 
 def _parse_seat_row(row: Any, side: SeatSide) -> dict[str, Any]:
@@ -511,6 +532,13 @@ def fetch_stock_seats(
     iso = _to_iso(ymd)
     display_name = _resolve_stock_name(code, name)
 
+    from app.services.cache import get_json, set_json
+
+    disk_key = f"lhb:seats:{code}:{ymd}"
+    disk = get_json(disk_key)
+    if disk is not None:
+        return disk
+
     try:
         import akshare as ak
 
@@ -542,7 +570,7 @@ def fetch_stock_seats(
             buys=buys,
             sells=sells,
         )
-        return {
+        payload = {
             "code": code,
             "name": display_name,
             "trade_date": iso,
@@ -551,6 +579,8 @@ def fetch_stock_seats(
             "graph": graph,
             "source": "akshare",
         }
+        set_json(disk_key, payload, 0.0)
+        return payload
     except Exception:
         if not allow_mock:
             raise

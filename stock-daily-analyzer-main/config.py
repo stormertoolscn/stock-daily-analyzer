@@ -18,7 +18,25 @@ except Exception:
 # 确保目录存在
 LOG_DIR.mkdir(exist_ok=True)
 REPORT_DIR.mkdir(exist_ok=True)
-OHLC_CACHE_DIR = BASE_DIR / "data" / "cache_ohlc"
+
+# K 线 / 浏览器缓存统一落到就近 stock_data（优先环境变量与便携目录）
+def _resolve_stock_data_dir() -> Path:
+    import os
+
+    env = (os.getenv("STOCK_DATA_DIR") or "").strip()
+    if env:
+        return Path(env)
+    # 缓存统一落到当前项目 stock_data；不再硬编码外部便携目录，
+    # 避免跨仓库共用缓存导致数据目录漂移（历史缓存已迁移到本仓库 stock_data）
+    repo_root = Path(__file__).resolve().parents[1]
+    sibling = repo_root / "stock_data"
+    if sibling.exists():
+        return sibling
+    return BASE_DIR / "data"
+
+
+STOCK_DATA_DIR = _resolve_stock_data_dir()
+OHLC_CACHE_DIR = STOCK_DATA_DIR / "cache_ohlc"
 OHLC_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 # 缓存最新一根K线距今天超过该天数则视为过期并重拉
 OHLC_CACHE_MAX_STALE_DAYS = 3

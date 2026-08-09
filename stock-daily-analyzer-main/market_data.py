@@ -311,6 +311,47 @@ def fetch_ohlc_yfinance(
     return _normalize_ohlc(data)
 
 
+def _incremental_ohlc(
+    code: str,
+    start_d: date,
+    end_d: date,
+    min_bars: int,
+) -> Optional[pd.DataFrame]:
+    """缓存存在但落后于最新交易日：只拉缓存末尾之后的新数据，合并去重后返回。
+
+    已下载的历史保留在本地，网上只补差异；失败（接口异常 / 停牌无新数据）
+    返回 None，由调用方回退全量拉取。
+    """
+    path = _cache_path(code)
+    if not path.exists():
+        return None
+    try:
+        df = _normalize_ohlc(pd.read_csv(path, parse_dates=["Date"]))
+        if df is None or df.empty:
+            return None
+        last = df.index.max().date()
+        fetch_start = last + timedelta(days=1)
+        if fetch_start > end_d:
+            return _read_ohlc_cache(code, start_d, end_d)
+        fresh = fetch_ohlc_tencent(
+            code,
+            start=fetch_start.strftime("%Y%m%d"),
+            end=end_d.strftime("%Y%m%d"),
+        )
+        if fresh is None or fresh.empty:
+            # 非交易日 / 停牌：保持旧缓存，仍尝试按需返回
+            return _read_ohlc_cache(code, start_d, end_d)
+        merged = pd.concat([df, fresh])
+        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+        _write_ohlc_cache(code, merged)
+        sliced = merged.loc[
+            (merged.index.date >= start_d) & (merged.index.date <= end_d)
+        ]
+        return sliced if not sliced.empty else None
+    except Exception:
+        return None
+
+
 def fetch_ohlc(
     code: str,
     *,
@@ -329,6 +370,10 @@ def fetch_ohlc(
         cached = _read_ohlc_cache(code, start_d, end_d)
         if cached is not None and len(cached) >= min_bars:
             return cached
+        # 缓存存在但停在昨日：只拉缺失区间增量合并，避免全量重下
+        incremental = _incremental_ohlc(code, start_d, end_d, min_bars)
+        if incremental is not None and len(incremental) >= min_bars:
+            return incremental
 
     fetchers = (
         lambda: fetch_ohlc_tencent(code, start=start, end=end, period=period),
