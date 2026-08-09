@@ -12,6 +12,7 @@ type ThemeMode =
   | "goose"
   | "github"
   | "chrome"
+  | "abi"
   | "auto";
 
 const THEME_STORAGE_KEY = "sda-theme-mode";
@@ -37,6 +38,7 @@ const themeOptions: { value: ThemeMode; label: string }[] = [
   { value: "goose", label: "鹅黄" },
   { value: "github", label: "GitHub" },
   { value: "chrome", label: "Chrome" },
+  { value: "abi", label: "ABi研究" },
   { value: "auto", label: "跟随系统" },
 ];
 

@@ -5,7 +5,10 @@
 body,
 #app {
   background-color: var(--color-bg);
+  background-image: var(--page-bg-image);
+  background-attachment: fixed;
   color: var(--color-text);
+  font-family: var(--font-ui, inherit);
 }
 
 /*
@@ -40,6 +43,11 @@ body,
 
   .pill {
     @apply cursor-pointer whitespace-nowrap rounded-full border border-transparent bg-bg px-3 py-1.5 text-sm text-text-muted transition-colors hover:text-text;
+    transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+
+  .pill:active {
+    transform: scale(0.98);
   }
 
   .pill-active {
@@ -66,9 +74,174 @@ body,
 
   .btn {
     @apply rounded-lg border border-border bg-bg-elevated px-4 py-1.5 text-sm text-text transition-colors hover:bg-bg;
+    transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+
+  .btn:active {
+    transform: scale(0.98);
   }
 
   .btn-primary {
     @apply border-transparent bg-accent text-white hover:bg-accent-hover;
   }
+}
+
+/* ---------- Apple Liquid Glass / Gemini 幻彩：关键表面 ---------- */
+html[data-theme="apple"],
+html[data-theme="apple-dark"],
+html[data-theme="gemini-light"],
+html[data-theme="gemini"] {
+  font-size: 17px;
+  line-height: 1.4;
+}
+
+html[data-theme="apple"] .card,
+html[data-theme="apple-dark"] .card,
+html[data-theme="gemini-light"] .card,
+html[data-theme="gemini"] .card,
+html[data-theme="apple"] .bg-bg-elevated,
+html[data-theme="apple-dark"] .bg-bg-elevated,
+html[data-theme="gemini-light"] .bg-bg-elevated,
+html[data-theme="gemini"] .bg-bg-elevated {
+  background: var(--glass-bg);
+  background-color: var(--color-bg-elevated); /* fallback */
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-surface);
+  box-shadow: var(--glass-shadow);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+}
+
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  html[data-theme="apple"] .card,
+  html[data-theme="apple-dark"] .card,
+  html[data-theme="gemini-light"] .card,
+  html[data-theme="gemini"] .card {
+    background: var(--color-bg-elevated);
+  }
+}
+
+html[data-theme="apple"] .pill,
+html[data-theme="apple-dark"] .pill,
+html[data-theme="gemini-light"] .pill,
+html[data-theme="gemini"] .pill {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.35);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  backdrop-filter: blur(12px) saturate(160%);
+}
+
+html[data-theme="apple"] .pill-active,
+html[data-theme="apple-dark"] .pill-active,
+html[data-theme="gemini-light"] .pill-active,
+html[data-theme="gemini"] .pill-active {
+  border-color: color-mix(in srgb, var(--color-accent) 70%, white);
+  box-shadow:
+    0 4px 16px color-mix(in srgb, var(--color-accent) 25%, transparent),
+    inset 0 1px 1px rgba(255, 255, 255, 0.45);
+}
+
+html[data-theme="gemini"] .pill-active,
+html[data-theme="gemini-light"] .pill-active {
+  background: linear-gradient(
+    120deg,
+    rgba(255, 120, 180, 0.28),
+    rgba(120, 160, 255, 0.28),
+    rgba(120, 255, 210, 0.22)
+  );
+}
+
+/* 主要业务面板也吃到玻璃 / 幻彩 */
+html[data-theme="apple"] .ths-window,
+html[data-theme="apple-dark"] .ths-window,
+html[data-theme="gemini-light"] .ths-window,
+html[data-theme="gemini"] .ths-window,
+html[data-theme="apple"] .cf-board,
+html[data-theme="apple-dark"] .cf-board,
+html[data-theme="gemini-light"] .cf-board,
+html[data-theme="gemini"] .cf-board,
+html[data-theme="apple"] .cf-total,
+html[data-theme="apple-dark"] .cf-total,
+html[data-theme="gemini-light"] .cf-total,
+html[data-theme="gemini"] .cf-total,
+html[data-theme="apple"] .cf-summary,
+html[data-theme="apple-dark"] .cf-summary,
+html[data-theme="gemini-light"] .cf-summary,
+html[data-theme="gemini"] .cf-summary,
+html[data-theme="apple"] .v3-root,
+html[data-theme="apple-dark"] .v3-root,
+html[data-theme="gemini-light"] .v3-root,
+html[data-theme="gemini"] .v3-root {
+  background: var(--glass-bg) !important;
+  background-color: var(--color-bg-elevated) !important;
+  border-color: var(--glass-border) !important;
+  box-shadow: var(--glass-shadow);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+}
+
+html[data-theme="apple"] .cf-page,
+html[data-theme="apple-dark"] .cf-page,
+html[data-theme="gemini-light"] .cf-page,
+html[data-theme="gemini"] .cf-page {
+  background: transparent !important;
+}
+
+html[data-theme="apple"] .nav-pill-active,
+html[data-theme="apple-dark"] .nav-pill-active,
+html[data-theme="gemini-light"] .nav-pill-active,
+html[data-theme="gemini"] .nav-pill-active {
+  border-color: var(--color-accent);
+}
+
+/* 鹅黄：面板贴合主体鹅黄色 */
+html[data-theme="goose"] .card,
+html[data-theme="goose"] .ths-window,
+html[data-theme="goose"] .cf-board,
+html[data-theme="goose"] .cf-total,
+html[data-theme="goose"] .cf-summary,
+html[data-theme="goose"] .v3-root {
+  background: #fffceb !important;
+  border-color: color-mix(in srgb, #96939b 42%, #faf4d3) !important;
+}
+
+html[data-theme="goose"] .cf-page {
+  background: transparent !important;
+}
+
+html[data-theme="goose"] .pill-active {
+  border-color: #96939b;
+  color: #5f5c64;
+  background: color-mix(in srgb, #96939b 14%, #faf4d3);
+}
+
+/* ---------- ABI Research 研究主题：Oswald 标题 + 深蓝正文 + 橙红强调 ---------- */
+html[data-theme="abi"] h1,
+html[data-theme="abi"] h2,
+html[data-theme="abi"] h3,
+html[data-theme="abi"] h4,
+html[data-theme="abi"] h5,
+html[data-theme="abi"] h6,
+html[data-theme="abi"] .card-title {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+html[data-theme="abi"] .nav-pill-active,
+html[data-theme="abi"] .pill-active {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, #ff5400 12%, transparent);
+}
+
+html[data-theme="abi"] .brand-bar,
+html[data-theme="abi"] .nav-pills {
+  border-bottom-color: #e2e8f0;
+}
+
+html[data-theme="abi"] .brand-bar,
+html[data-theme="abi"] .nav-pills,
+html[data-theme="abi"] .app-shell {
+  background: transparent;
 }

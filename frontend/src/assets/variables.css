@@ -1,8 +1,7 @@
 /*
  * 主题变量定义。
  * data-theme 由 MainLayout 的主题切换器写到 <html> 上，
- * "跟随系统" 模式会在 JS 中解析为 light/dark 后再写入，
- * 因此这里只需维护 4 套具体配色 + 默认(浅色)。
+ * "跟随系统" 模式会在 JS 中解析为 light/dark 后再写入。
  */
 
 :root {
@@ -14,8 +13,18 @@
   --color-text-muted: #6b7280;
   --color-accent: #3b82f6;
   --color-accent-hover: #2563eb;
-  --color-up: #f5222d;
-  --color-down: #16a34a;
+  /* 通达信阳线红为最终标准：高饱和纯红（非 MSN 橙红） */
+  --color-up: #ff2438;
+  --color-down: #107c10;
+  --font-ui: inherit;
+  --font-heading: inherit;
+  --radius-surface: 12px;
+  --radius-pill: 999px;
+  --glass-bg: transparent;
+  --glass-border: transparent;
+  --glass-shadow: none;
+  --glass-blur: 0px;
+  --page-bg-image: none;
 }
 
 [data-theme="light"] {
@@ -27,8 +36,8 @@
   --color-text-muted: #6b7280;
   --color-accent: #3b82f6;
   --color-accent-hover: #2563eb;
-  --color-up: #f5222d;
-  --color-down: #16a34a;
+  --color-up: #ff2438;
+  --color-down: #107c10;
 }
 
 [data-theme="dark"] {
@@ -40,8 +49,151 @@
   --color-text-muted: #9aa0a6;
   --color-accent: #4c8dff;
   --color-accent-hover: #6ea2ff;
-  --color-up: #f5222d;
-  --color-down: #22c55e;
+  /* 通达信阳线红 + 亮绿跌 */
+  --color-up: #ff2438;
+  --color-down: #3af277;
+}
+
+/* 浅色苹果 · iOS 26 Liquid Glass */
+[data-theme="apple"] {
+  --color-bg: #e8eef8;
+  --color-bg-elevated: rgba(255, 255, 255, 0.55);
+  --color-bg-sidebar: rgba(255, 255, 255, 0.42);
+  --color-border: rgba(255, 255, 255, 0.55);
+  --color-text: #0b1220;
+  --color-text-muted: #5b6578;
+  --color-accent: #007aff;
+  --color-accent-hover: #0a84ff;
+  --color-up: #ff2438;
+  --color-down: #107c10;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --radius-surface: 16px;
+  --radius-pill: 999px;
+  --glass-bg: rgba(255, 255, 255, 0.4);
+  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.08),
+    inset 0 1px 2px rgba(255, 255, 255, 0.6);
+  --glass-blur: 20px;
+  --page-bg-image:
+    radial-gradient(1200px 600px at 12% -10%, #b8d4ff 0%, transparent 55%),
+    radial-gradient(900px 520px at 92% 8%, #ffd6e7 0%, transparent 50%),
+    radial-gradient(800px 480px at 50% 110%, #c8f7e4 0%, transparent 45%),
+    linear-gradient(165deg, #e9f0ff 0%, #f4f7fb 45%, #eef2f8 100%);
+}
+
+/* 深色苹果 · Liquid Glass Dark */
+[data-theme="apple-dark"] {
+  --color-bg: #0b0d12;
+  --color-bg-elevated: rgba(28, 28, 32, 0.62);
+  --color-bg-sidebar: rgba(22, 22, 26, 0.55);
+  --color-border: rgba(255, 255, 255, 0.18);
+  --color-text: #f5f5f7;
+  --color-text-muted: #98989f;
+  --color-accent: #0a84ff;
+  --color-accent-hover: #409cff;
+  --color-up: #ff2438;
+  --color-down: #3af277;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --radius-surface: 16px;
+  --radius-pill: 999px;
+  --glass-bg: rgba(20, 20, 20, 0.6);
+  --glass-border: rgba(255, 255, 255, 0.22);
+  --glass-shadow:
+    0 10px 36px rgba(0, 0, 0, 0.45),
+    inset 0 1px 1px rgba(255, 255, 255, 0.18);
+  --glass-blur: 22px;
+  --page-bg-image:
+    radial-gradient(1000px 560px at 10% 0%, rgba(40, 90, 180, 0.45) 0%, transparent 55%),
+    radial-gradient(820px 480px at 95% 15%, rgba(160, 60, 120, 0.35) 0%, transparent 50%),
+    radial-gradient(700px 420px at 50% 100%, rgba(40, 140, 110, 0.28) 0%, transparent 48%),
+    linear-gradient(165deg, #0a0c10 0%, #12151c 50%, #0d1016 100%);
+}
+
+/* 浅色 Gemini · 明亮幻彩 */
+[data-theme="gemini-light"] {
+  --color-bg: #f7f4ff;
+  --color-bg-elevated: rgba(255, 255, 255, 0.72);
+  --color-bg-sidebar: rgba(255, 252, 255, 0.66);
+  --color-border: rgba(120, 100, 180, 0.18);
+  --color-text: #1a1430;
+  --color-text-muted: #6b6288;
+  --color-accent: #5b6cff;
+  --color-accent-hover: #4556f0;
+  --color-up: #ff2438;
+  --color-down: #107c10;
+  --font-ui: "Google Sans", "Product Sans", system-ui, -apple-system, sans-serif;
+  --radius-surface: 18px;
+  --radius-pill: 999px;
+  --glass-bg: rgba(255, 255, 255, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.7);
+  --glass-shadow:
+    0 8px 28px rgba(90, 70, 160, 0.12),
+    inset 0 1px 1px rgba(255, 255, 255, 0.75);
+  --glass-blur: 18px;
+  --page-bg-image:
+    radial-gradient(900px 520px at 8% 12%, rgba(255, 170, 210, 0.55) 0%, transparent 55%),
+    radial-gradient(820px 480px at 88% 18%, rgba(160, 200, 255, 0.55) 0%, transparent 52%),
+    radial-gradient(760px 520px at 55% 92%, rgba(160, 255, 220, 0.42) 0%, transparent 50%),
+    radial-gradient(640px 420px at 70% 55%, rgba(210, 180, 255, 0.45) 0%, transparent 48%),
+    linear-gradient(135deg, #fff5fb 0%, #f0f6ff 40%, #f4fffb 100%);
+}
+
+/* 深色 Gemini · 幻彩夜色 */
+[data-theme="gemini"] {
+  --color-bg: #0b1020;
+  --color-bg-elevated: rgba(20, 18, 40, 0.72);
+  --color-bg-sidebar: rgba(16, 14, 36, 0.66);
+  --color-border: rgba(255, 255, 255, 0.16);
+  --color-text: #f4f1ff;
+  --color-text-muted: #b9b0d8;
+  --color-accent: #8ab4ff;
+  --color-accent-hover: #aecbfa;
+  --color-up: #ff2438;
+  --color-down: #3af277;
+  --font-ui: "Google Sans", "Product Sans", system-ui, -apple-system, sans-serif;
+  --radius-surface: 18px;
+  --radius-pill: 999px;
+  --glass-bg: rgba(255, 255, 255, 0.08);
+  --glass-border: rgba(255, 255, 255, 0.22);
+  --glass-shadow:
+    0 10px 36px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  --glass-blur: 18px;
+  --page-bg-image:
+    radial-gradient(900px 520px at 8% 12%, rgba(255, 120, 180, 0.55) 0%, transparent 55%),
+    radial-gradient(820px 480px at 88% 18%, rgba(90, 160, 255, 0.55) 0%, transparent 52%),
+    radial-gradient(760px 520px at 55% 92%, rgba(120, 255, 210, 0.42) 0%, transparent 50%),
+    radial-gradient(640px 420px at 70% 55%, rgba(180, 120, 255, 0.4) 0%, transparent 48%),
+    linear-gradient(135deg, #1a1030 0%, #0d1b3a 40%, #122018 100%);
+}
+
+/* 鹅黄 · FAF4D3 + 96939B */
+[data-theme="goose"] {
+  --color-bg: #faf4d3;
+  --color-bg-elevated: #fffceb;
+  --color-bg-sidebar: #f5efc8;
+  --color-border: color-mix(in srgb, #96939b 42%, #faf4d3);
+  --color-text: #2f2d33;
+  --color-text-muted: #96939b;
+  --color-accent: #7a7680;
+  --color-accent-hover: #5f5c64;
+  --color-up: #ff2438;
+  --color-down: #107c10;
+  --font-ui: inherit;
+  --font-heading: inherit;
+  --radius-surface: 12px;
+  --radius-pill: 999px;
+  --glass-bg: transparent;
+  --glass-border: transparent;
+  --glass-shadow: none;
+  --glass-blur: 0px;
+  --page-bg-image:
+    radial-gradient(900px 480px at 10% 0%, #fff8d6 0%, transparent 55%),
+    radial-gradient(700px 420px at 100% 20%, #f0e8b8 0%, transparent 50%),
+    linear-gradient(180deg, #faf4d3 0%, #f3ecc0 100%);
 }
 
 [data-theme="github"] {
@@ -53,8 +205,8 @@
   --color-text-muted: #57606a;
   --color-accent: #0969da;
   --color-accent-hover: #0550ae;
-  --color-up: #cf222e;
-  --color-down: #1a7f37;
+  --color-up: #ff2438;
+  --color-down: #107c10;
 }
 
 [data-theme="chrome"] {
@@ -66,15 +218,43 @@
   --color-text-muted: #5f6368;
   --color-accent: #1a73e8;
   --color-accent-hover: #1765cc;
-  --color-up: #d93025;
-  --color-down: #188038;
+  --color-up: #ff2438;
+  --color-down: #107c10;
 }
 
+
+/* ABI Research 研究主题：像素参考 abiresearch.com（Roboto 正文 + Oswald 标题，橙红 #ff5400 / 深海军蓝 #002d5d） */
+[data-theme="abi"] {
+  --color-bg: #ffffff;
+  --color-bg-elevated: #ffffff;
+  --color-bg-sidebar: #f7fafc;
+  --color-border: #e2e8f0;
+  --color-text: #002d5d;
+  --color-text-muted: #5b6670;
+  --color-accent: #ff5400;
+  --color-accent-hover: #e04a00;
+  --color-up: #ff2438;
+  --color-down: #107c10;
+  --font-ui: "Roboto", system-ui, -apple-system, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  --font-heading: "Oswald", "Roboto", "PingFang SC", "Microsoft YaHei",
+    sans-serif;
+  --radius-surface: 6px;
+  --radius-pill: 999px;
+  --glass-bg: transparent;
+  --glass-border: transparent;
+  --glass-shadow: none;
+  --glass-blur: 0px;
+  --page-bg-image: linear-gradient(180deg, #ffffff 0%, #f7fafc 100%);
+}
 body,
 #app {
   background-color: var(--color-bg);
+  background-image: var(--page-bg-image);
+  background-attachment: fixed;
   color: var(--color-text);
+  font-family: var(--font-ui);
   transition:
-    background-color 0.15s ease,
-    color 0.15s ease;
+    background-color 0.2s ease,
+    color 0.2s ease;
 }
