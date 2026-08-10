@@ -187,7 +187,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell flex h-screen flex-col overflow-hidden bg-bg">
+  <div
+    class="app-shell flex h-screen flex-col overflow-hidden bg-bg"
+    :class="{ 'app-shell-left-pinned': headerMode === 'left' && headerPinned }"
+  >
     <!-- 顶部热区：顶部版头模式，未钉住时划入唤出 -->
     <div
       v-show="headerMode === 'top' && !headerPinned"
@@ -347,6 +350,11 @@ onBeforeUnmount(() => {
   position: relative;
 }
 
+/* 左侧版头钉住：主窗体右移给侧栏让位，避免内容被遮 */
+.app-shell-left-pinned {
+  padding-left: 180px;
+}
+
 .header-hit {
   position: absolute;
   top: 0;
@@ -411,7 +419,7 @@ onBeforeUnmount(() => {
   left: 0;
   bottom: 0;
   z-index: 65;
-  width: 272px;
+  width: 180px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -429,7 +437,7 @@ onBeforeUnmount(() => {
 }
 
 .left-header-hidden {
-  transform: translateX(-100%);
+  transform: translateX(-180px);
   opacity: 0;
   pointer-events: none;
   box-shadow: none;
