@@ -251,10 +251,18 @@ body,
 #app {
   background-color: var(--color-bg);
   background-image: var(--page-bg-image);
-  background-attachment: fixed;
+  /* 背景随页面滚动：fixed 在超宽窗口下会被 Chrome 渲染成灰色 */
   color: var(--color-text);
   font-family: var(--font-ui);
   transition:
     background-color 0.2s ease,
     color 0.2s ease;
+}
+
+/* 超宽窗口（≥2200px）下 Chrome 对超大渐变背景渲染异常（整体变灰），回退纯色 */
+@media (min-width: 2200px) {
+  body,
+  #app {
+    background-image: none;
+  }
 }

@@ -6,7 +6,7 @@ body,
 #app {
   background-color: var(--color-bg);
   background-image: var(--page-bg-image);
-  background-attachment: fixed;
+  /* 背景随页面滚动：fixed 在超宽窗口下会被 Chrome 渲染成灰色 */
   color: var(--color-text);
   font-family: var(--font-ui, inherit);
 }
@@ -240,10 +240,14 @@ html[data-theme="abi"] .nav-pills {
   border-bottom-color: #e2e8f0;
 }
 
-html[data-theme="abi"] .brand-bar,
-html[data-theme="abi"] .nav-pills,
+/* abi：app-shell 透出浅色底；版头与主导航保持白色实体底（浮动时不透出页面内容） */
 html[data-theme="abi"] .app-shell {
   background: transparent;
+}
+
+html[data-theme="abi"] .brand-bar,
+html[data-theme="abi"] .nav-pills {
+  background: var(--color-bg-elevated);
 }
 /* ---------- ABI Research：主图 hero 深蓝 banner + 橙色 CTA ---------- */
 html[data-theme="abi"] .home-hero,
@@ -353,9 +357,15 @@ html[data-theme="abi"] .bt-hero-meta span {
   background: rgba(255, 255, 255, 0.08);
 }
 
-/* 玻璃主题家族不回退：abi 固定浅色正文区 */
-html[data-theme="abi"] .qnt-toc,
-html[data-theme="abi"] .brand-bar,
-html[data-theme="abi"] .nav-pills {
+/* abi：正文区页内导航条透出浅色背景；版头与主导航保持白色实体底，
+   避免浮动版头透明后透出页面内容 */
+html[data-theme="abi"] .qnt-toc {
   background: transparent;
+}
+/* 超宽窗口下 Chrome 对超大渐变背景渲染异常（整体变灰），回退纯色背景 */
+@media (min-width: 2200px) {
+  body,
+  #app {
+    background-image: none;
+  }
 }
