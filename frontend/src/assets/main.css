@@ -240,44 +240,71 @@ html[data-theme="abi"] .app-shell {
   background: transparent;
 }
 
-/* 版头：深蓝渐变底 + 白字 + 橙色底线（ABI 品牌配色） */
-html[data-theme="abi"] .brand-bar {
+/* 版头：深蓝渐变底 + 白字 + 橙色边线（ABI 品牌配色；顶部版头底线、左侧版头右边线） */
+html[data-theme="abi"] .brand-bar,
+html[data-theme="abi"] .left-header {
   background: linear-gradient(90deg, #002d5d 0%, #01387a 100%);
+}
+
+html[data-theme="abi"] .brand-bar {
   border-bottom: 3px solid #ff5400;
 }
 
-html[data-theme="abi"] .brand-bar h1 {
+html[data-theme="abi"] .left-header {
+  border-right: 3px solid #ff5400;
+}
+
+html[data-theme="abi"] .brand-bar h1,
+html[data-theme="abi"] .left-header h1 {
   color: #ffffff;
 }
 
-html[data-theme="abi"] .brand-bar .text-text-muted {
+html[data-theme="abi"] .brand-bar .text-text-muted,
+html[data-theme="abi"] .left-header .left-sub,
+html[data-theme="abi"] .left-header .left-label {
   color: rgba(255, 255, 255, 0.78);
 }
 
-html[data-theme="abi"] .brand-bar .pill {
+html[data-theme="abi"] .brand-bar .pill,
+html[data-theme="abi"] .left-header .pill {
   background: rgba(255, 255, 255, 0.12);
   border-color: rgba(255, 255, 255, 0.28);
   color: rgba(255, 255, 255, 0.9);
 }
 
-html[data-theme="abi"] .brand-bar .pill:hover {
+html[data-theme="abi"] .brand-bar .pill:hover,
+html[data-theme="abi"] .left-header .pill:hover {
   color: #ffffff;
   border-color: #ff5400;
 }
 
-html[data-theme="abi"] .brand-bar .pill-active {
+html[data-theme="abi"] .brand-bar .pill-active,
+html[data-theme="abi"] .left-header .pill-active {
   border-color: #ff5400;
   color: #ffffff;
   background: rgba(255, 84, 0, 0.28);
 }
 
-html[data-theme="abi"] .brand-bar .header-pin {
+html[data-theme="abi"] .brand-bar .header-pin,
+html[data-theme="abi"] .left-header .header-pin {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.3);
   color: rgba(255, 255, 255, 0.85);
 }
 
-html[data-theme="abi"] .brand-bar .header-pin-on {
+html[data-theme="abi"] .brand-bar .header-pin-on,
+html[data-theme="abi"] .left-header .header-pin-on {
+  color: #ff5400;
+  border-color: #ff5400;
+}
+
+html[data-theme="abi"] .left-mode-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+html[data-theme="abi"] .left-mode-btn:hover {
   color: #ff5400;
   border-color: #ff5400;
 }
