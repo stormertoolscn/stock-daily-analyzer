@@ -40,6 +40,9 @@
     *   `cache_ohlc/` 日线 CSV 增量复用；`api/` 下 LHB/资金流等为可读路径（如 `api/lhb/daily/20260808.json`）。
     *   `ui/localStorage/`、`meta/`、`tmp/` 一并纳入；去掉硬编码外部便携路径。
     *   健康检查 `/api/health` 与 `/api/cache/data-root` 可查看数据根与占用。
+### v1.18.0 (2026-08-11)
+*   **开机自启**：`I:\TATHAGATA\start-stock-analyzer.bat/.ps1` 开机自动启动本地服务并打开网页，已注册到 Windows 启动文件夹。
+*   **仓库与文件恢复**：git 对象损坏已从 GitHub 重建；32 个被误删文件已恢复；重建 RangeStatsDialog 组件、补齐 MACD_MAGENTA、清理丢失模块引用。
 ### v1.17.0 (2026-08-10)
 *   **左侧版头优化**：侧栏宽度 180px；钉住时主窗体与导航右移让位，内容不被遮挡。
 ### v1.16.0 (2026-08-10)

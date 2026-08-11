@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import backtest, cache_backup, fundflow, lhb, stock
+from app.api import backtest, fundflow, lhb, stock
 from app.core.config import settings
 
 
@@ -20,6 +20,7 @@ def _warmup_stock_universe() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+
     # 同步预热会卡在 “Waiting for application startup” 数十秒；改为后台线程
     threading.Thread(
         target=_warmup_stock_universe,
@@ -43,7 +44,7 @@ app.include_router(stock.router)
 app.include_router(lhb.router)
 app.include_router(fundflow.router)
 app.include_router(backtest.router)
-app.include_router(cache_backup.router)
+
 
 
 @app.get("/api/health")

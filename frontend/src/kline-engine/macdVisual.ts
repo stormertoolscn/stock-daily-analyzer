@@ -10,6 +10,8 @@ import type { KlineBar } from "./types";
 export const MACD_SHORT = 12;
 export const MACD_LONG = 26;
 export const MACD_MM = 9;
+/** 涨停紫 / 获利洋红：MACD 幅图与 K 线特征共用 */
+export const MACD_MAGENTA = "#e040fb";
 
 export interface MacdVisualSeries {
   dif: number[];
