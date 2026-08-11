@@ -1234,8 +1234,9 @@ function priceColor(up: boolean): string {
 .ths-window {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 9.5rem);
-  min-height: 640px;
+  /* 弹性填满可用高度：矮窗口不留底部空白，高窗口自动拉伸 */
+  flex: 1;
+  min-height: 0;
   border-radius: 14px;
   border: 1px solid var(--color-border);
   background: var(--color-bg-elevated);
@@ -1960,7 +1961,7 @@ function priceColor(up: boolean): string {
 
 .ths-chart-wrap {
   flex: 1;
-  min-height: 420px;
+  min-height: 220px;
   margin-top: 2px;
   position: relative;
 }
